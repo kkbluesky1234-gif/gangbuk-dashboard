@@ -49,13 +49,44 @@ function provinceOf(city) {
   return "";
 }
 
-/* ---------- 저장/로드 ---------- */
-function loadSites() {
+/* ---------- 저장/로드 ----------
+   SERVER_BASE_URL이 설정되어 있으면 "현장 데이터"도 서버(공유)에 저장/조회합니다.
+   그러면 이 링크를 여는 모든 사람이 같은 최신 데이터를 보게 됩니다.
+   서버가 없으면(SERVER_BASE_URL이 빈 값) 지금까지처럼 이 브라우저에만 저장됩니다. */
+async function loadSites() {
+  if (SERVER_BASE_URL) {
+    try {
+      const res = await fetch(`${SERVER_BASE_URL}/api/sites`);
+      if (res.ok) {
+        const payload = await res.json();
+        sites = Array.isArray(payload.sites) ? payload.sites : [];
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(sites)); // 오프라인 대비 캐시
+        return;
+      }
+    } catch (e) {
+      console.warn("서버에서 현장 데이터를 못 불러왔습니다. 로컬 캐시를 사용합니다.", e);
+    }
+  }
   try { sites = JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
   catch (e) { sites = []; }
 }
+
+let _serverSyncTimer = null;
 function persist() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(sites));
+  if (!SERVER_BASE_URL) return;
+  // 연속 편집(드래그 등) 시 서버에 너무 자주 쏘지 않도록 살짝 모아서 보냄
+  clearTimeout(_serverSyncTimer);
+  _serverSyncTimer = setTimeout(async () => {
+    try {
+      await fetch(`${SERVER_BASE_URL}/api/sites`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(sites)
+      });
+    } catch (e) {
+      console.warn("서버에 현장 데이터 저장 실패(로컬에는 저장됨):", e);
+    }
+  }, 600);
 }
 function uid() {
   return "s_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -103,6 +134,14 @@ document.getElementById("btnLogout").addEventListener("click", () => {
   loginGate.classList.remove("hidden");
   pwBox.classList.add("hidden");
   pwInput.value = "";
+});
+
+document.getElementById("btnRefreshData").addEventListener("click", async () => {
+  const btn = document.getElementById("btnRefreshData");
+  btn.disabled = true; btn.textContent = "새로고침 중...";
+  await loadSites();
+  refreshAll();
+  btn.disabled = false; btn.textContent = "🔄 새로고침";
 });
 
 // 콘솔에서 관리자 비밀번호를 바꾸고 싶을 때: changeAdminPassword("새비밀번호")
@@ -307,8 +346,9 @@ document.getElementById("pwChangeConfirm").addEventListener("click", () => {
 });
 
 /* ---------- 지도 초기화 ---------- */
-function initMap() {
-  loadSites();
+async function initMap() {
+  document.getElementById("map").innerHTML = '<div style="padding:40px;font-size:14px;color:#64748b">불러오는 중...</div>';
+  await loadSites();
   if (typeof kakao === "undefined" || !kakao.maps) {
     document.getElementById("map").innerHTML =
       '<div style="padding:40px;font-size:14px;color:#64748b">카카오맵 API 키가 설정되지 않았거나 이 주소가 카카오 디벨로퍼스에 도메인 등록되지 않았습니다.<br>(카카오 디벨로퍼스 → 내 애플리케이션 → 플랫폼 → Web 도메인 등록 필요)</div>';
