@@ -23,7 +23,7 @@ const FIELD_ORDER = [
   ["expectedOrder", "예상발주"], ["newUnits", "신축세대"], ["totalFloorArea", "연면적(m²)"],
   ["scale", "규모(층수 등)"], ["unionMembers", "조합원수"], ["lastLogDate", "최근 일지 날짜"],
   ["maintCo", "정비업체"], ["designCo", "설계업체"], ["trustCo", "신탁사"],
-  ["manager", "담당자"], ["lat", "위도"], ["lng", "경도"],
+  ["manager", "담당자"], ["lat", "위도"], ["lng", "경도"], ["boundaryText", "구역 경계 좌표"],
   ["nextEventDate", "다음 일정 날짜"], ["nextEventNote", "다음 일정 메모"], ["note", "비고"]
 ];
 
@@ -795,8 +795,8 @@ function renderMarkers() {
     if (site.boundary && site.boundary.length > 2) {
       const path = site.boundary.map(([la, ln]) => new kakao.maps.LatLng(la, ln));
       const polygon = new kakao.maps.Polygon({
-        path, strokeWeight: 2, strokeColor: "#2f6fed", strokeOpacity: 0.8,
-        fillColor: "#2f6fed", fillOpacity: 0.15
+        path, strokeWeight: 3, strokeColor: "#1e293b", strokeOpacity: 0.9,
+        fillColor: "#ffffff", fillOpacity: 0.55, zIndex: 2
       });
       polygon.setMap(map);
       markerLayer.push({ overlay: polygon });
@@ -1545,7 +1545,17 @@ document.getElementById("excelFileInput").addEventListener("change", e => {
         site[key] = row[label] !== undefined ? row[label] : "";
       });
       site.name = name; site.city = city; site.district = district;
-      site.boundary = [];
+
+      // "구역 경계 좌표" 열: "위도,경도" 쌍을 세미콜론(;) 또는 줄바꿈으로 구분해 입력.
+      // 좌표추출도구의 "엑셀용 문자열 복사" 버튼이 만드는 형식과 동일합니다.
+      const boundaryRaw = String(site.boundaryText || "").trim();
+      site.boundary = boundaryRaw
+        ? boundaryRaw.split(/[;\n]/).map(pair => {
+            const [la, ln] = pair.split(",").map(v => Number(String(v).trim()));
+            return (isNaN(la) || isNaN(ln)) ? null : [la, ln];
+          }).filter(Boolean)
+        : [];
+      delete site.boundaryText;
       sites.push(site);
       added++;
     });
