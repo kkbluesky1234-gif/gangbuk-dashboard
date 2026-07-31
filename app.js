@@ -1473,3 +1473,124 @@ function dateStamp() {
   const d = new Date();
   return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
 }
+
+/* =========================================================
+   구역 좌표 추출 모달 — 현장 등록/수정 화면의 "구역 경계 좌표" 칸을
+   별도 도구 없이 이 지도 위에서 바로 클릭해서 채울 수 있게 합니다.
+   ========================================================= */
+let bpMap, bpPolygon, bpMarkers = [], bpPoints = [], bpGeocoder;
+let bpCadastralOn = false;
+
+const boundaryPickerModal = document.getElementById("boundaryPickerModal");
+
+function openBoundaryPicker() {
+  boundaryPickerModal.classList.remove("hidden");
+
+  // 기존에 입력돼 있던 좌표가 있으면 그대로 불러와서 이어서 수정 가능
+  const existingText = document.getElementById("f_boundary").value.trim();
+  bpPoints = existingText
+    ? existingText.split("\n").map(line => {
+        const [la, ln] = line.split(",").map(v => Number(v.trim()));
+        return (isNaN(la) || isNaN(ln)) ? null : new kakao.maps.LatLng(la, ln);
+      }).filter(Boolean)
+    : [];
+
+  if (!bpMap) {
+    bpMap = new kakao.maps.Map(document.getElementById("boundaryPickerMap"), {
+      center: new kakao.maps.LatLng(37.5665, 126.9780),
+      level: 4
+    });
+    bpGeocoder = new kakao.maps.services.Geocoder();
+    kakao.maps.event.addListener(bpMap, "click", e => {
+      bpPoints.push(e.latLng);
+      bpRedraw();
+    });
+  }
+
+  // 폼에 위도/경도가 이미 있으면 그 위치로, 기존 좌표가 있으면 그 범위로 이동
+  const fLat = Number(document.getElementById("f_lat").value);
+  const fLng = Number(document.getElementById("f_lng").value);
+  if (bpPoints.length) {
+    const bounds = new kakao.maps.LatLngBounds();
+    bpPoints.forEach(p => bounds.extend(p));
+    bpMap.setBounds(bounds);
+  } else if (fLat && fLng) {
+    bpMap.setCenter(new kakao.maps.LatLng(fLat, fLng));
+    bpMap.setLevel(4);
+  }
+
+  bpRedraw();
+}
+
+function closeBoundaryPicker() {
+  boundaryPickerModal.classList.add("hidden");
+}
+
+function bpRedraw() {
+  bpMarkers.forEach(m => m.setMap(null));
+  bpMarkers = [];
+  if (bpPolygon) bpPolygon.setMap(null);
+
+  bpPoints.forEach(p => {
+    const marker = new kakao.maps.Marker({ position: p, map: bpMap });
+    bpMarkers.push(marker);
+  });
+
+  if (bpPoints.length >= 2) {
+    bpPolygon = new kakao.maps.Polygon({
+      path: bpPoints,
+      strokeWeight: 3, strokeColor: "#2f6fed", strokeOpacity: 0.9,
+      fillColor: "#2f6fed", fillOpacity: 0.35
+    });
+    bpPolygon.setMap(bpMap);
+  }
+
+  document.getElementById("bpCount").textContent = bpPoints.length;
+}
+
+document.getElementById("btnBoundaryPicker").addEventListener("click", openBoundaryPicker);
+document.getElementById("boundaryPickerClose").addEventListener("click", closeBoundaryPicker);
+document.getElementById("boundaryPickerCancel").addEventListener("click", closeBoundaryPicker);
+
+document.getElementById("bpUndo").addEventListener("click", () => { bpPoints.pop(); bpRedraw(); });
+document.getElementById("bpClear").addEventListener("click", () => { bpPoints = []; bpRedraw(); });
+
+document.getElementById("bpCadastral").addEventListener("click", () => {
+  if (!bpMap) return;
+  if (bpCadastralOn) bpMap.removeOverlayMapTypeId(kakao.maps.MapTypeId.USE_DISTRICT);
+  else bpMap.addOverlayMapTypeId(kakao.maps.MapTypeId.USE_DISTRICT);
+  bpCadastralOn = !bpCadastralOn;
+});
+
+function bpDoSearch() {
+  const q = document.getElementById("bpSearch").value.trim();
+  if (!q || !bpGeocoder) return;
+  bpGeocoder.addressSearch(q, (result, status) => {
+    if (status === kakao.maps.services.Status.OK) {
+      bpMap.setCenter(new kakao.maps.LatLng(result[0].y, result[0].x));
+      bpMap.setLevel(3);
+    } else {
+      const places = new kakao.maps.services.Places();
+      places.keywordSearch(q, (data, status2) => {
+        if (status2 === kakao.maps.services.Status.OK && data.length > 0) {
+          bpMap.setCenter(new kakao.maps.LatLng(data[0].y, data[0].x));
+          bpMap.setLevel(3);
+        } else {
+          alert("검색 결과가 없습니다.");
+        }
+      });
+    }
+  });
+}
+document.getElementById("bpSearchBtn").addEventListener("click", bpDoSearch);
+document.getElementById("bpSearch").addEventListener("keydown", e => { if (e.key === "Enter") bpDoSearch(); });
+
+document.getElementById("boundaryPickerApply").addEventListener("click", () => {
+  if (bpPoints.length < 3) {
+    alert("점을 3개 이상 찍어야 구역 도형이 만들어집니다.");
+    return;
+  }
+  const text = bpPoints.map(p => `${p.getLat().toFixed(6)},${p.getLng().toFixed(6)}`).join("\n");
+  document.getElementById("f_boundary").value = text;
+  closeBoundaryPicker();
+});
