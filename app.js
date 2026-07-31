@@ -30,6 +30,15 @@ const FIELD_ORDER = [
 const PIPELINE_STAGES = ["미관리", "모니터링", "스크린", "중점", "입찰", "수주", "타사선정"];
 const DEFAULT_REGIONS = ["강서", "강북", "강남"];
 const PROVINCES = ["서울특별시", "경기도", "인천광역시"];
+const GYEONGGI_CITIES = [
+  "수원시", "성남시", "고양시", "용인시", "부천시", "안산시", "안양시", "남양주시",
+  "화성시", "평택시", "의정부시", "시흥시", "파주시", "김포시", "광명시", "광주시",
+  "군포시", "이천시", "양주시", "오산시", "구리시", "안성시", "포천시", "의왕시",
+  "하남시", "여주시", "양평군", "동두천시", "과천시", "가평군", "연천군"
+];
+const INCHEON_DISTRICTS = ["중구", "동구", "미추홀구", "연수구", "남동구", "부평구", "계양구", "서구", "강화군", "옹진군"];
+let provinceDrilldown = null;
+let mainGeocoder;
 
 let sites = [];
 let isAdmin = false;
@@ -420,9 +429,12 @@ document.getElementById("managerFilter").addEventListener("change", e => {
 });
 document.getElementById("districtSelect").addEventListener("change", e => {
   districtFilter = e.target.value; renderMarkers(); renderSiteList();
+  fitMapToVisibleSites();
 });
 document.getElementById("clearDistrictFilter").addEventListener("click", () => {
   districtFilter = ""; document.getElementById("districtSelect").value = "";
+  provinceFilter = ""; provinceDrilldown = null;
+  renderProvincePanel();
   renderMarkers(); renderSiteList();
 });
 
@@ -438,17 +450,97 @@ function visibleSites() {
 
 /* ---------- 시도 선택 (지도 우측 상단) ---------- */
 function renderProvincePanel() {
+  const titleEl = document.getElementById("provinceTitle");
   const box = document.getElementById("provinceButtons");
-  box.innerHTML = PROVINCES.map(p =>
-    `<button class="${provinceFilter === p ? "active" : ""} ${p === "인천광역시" ? "span2" : ""}" data-p="${esc(p)}">${esc(p)}</button>`
+
+  if (!provinceDrilldown) {
+    titleEl.textContent = "시도 선택";
+    box.className = "province-buttons";
+    box.innerHTML = PROVINCES.map(p =>
+      `<button class="${provinceFilter === p ? "active" : ""} ${p === "인천광역시" ? "span2" : ""}" data-p="${esc(p)}">${esc(p)}</button>`
+    ).join("");
+    box.querySelectorAll("button").forEach(btn => {
+      btn.addEventListener("click", () => {
+        provinceFilter = btn.dataset.p;
+        provinceDrilldown = btn.dataset.p;
+        renderProvincePanel();
+        renderMarkers(); renderSiteList();
+      });
+    });
+    return;
+  }
+
+  // 드릴다운: 선택한 시/도의 구·시 목록을 보여줌
+  titleEl.innerHTML = `<button id="provinceBack" class="province-back">← 시도 선택</button> &gt; ${esc(provinceDrilldown)}`;
+
+  let list = [];
+  if (provinceDrilldown === "서울특별시") {
+    list = (window.SEOUL_DISTRICTS || []).map(d => d.name).slice().sort();
+  } else if (provinceDrilldown === "경기도") {
+    list = GYEONGGI_CITIES;
+  } else if (provinceDrilldown === "인천광역시") {
+    list = INCHEON_DISTRICTS;
+  }
+
+  box.className = "province-buttons district-grid";
+  box.innerHTML = list.map(name =>
+    `<button class="${districtFilter === name ? "active" : ""}" data-d="${esc(name)}">${esc(name)}</button>`
   ).join("");
-  box.querySelectorAll("button").forEach(btn => {
+
+  document.getElementById("provinceBack").addEventListener("click", () => {
+    provinceDrilldown = null;
+    renderProvincePanel();
+  });
+  box.querySelectorAll("button[data-d]").forEach(btn => {
     btn.addEventListener("click", () => {
-      provinceFilter = provinceFilter === btn.dataset.p ? "" : btn.dataset.p;
+      const name = btn.dataset.d;
+      districtFilter = districtFilter === name ? "" : name;
+      const sel = document.getElementById("districtSelect");
+      if (sel) sel.value = districtFilter;
       renderProvincePanel();
       renderMarkers(); renderSiteList();
+      if (districtFilter) navigateToDistrict(provinceDrilldown, name);
     });
   });
+}
+
+/* 구/시 버튼을 누르면 그 지역으로 지도를 이동합니다.
+   서울은 이미 있는 자치구 경계 데이터로 정확히 맞춰 확대하고,
+   경기/인천은 카카오 지오코더로 대략 위치를 찾아 이동합니다. */
+function navigateToDistrict(province, name) {
+  if (!map) return;
+  if (province === "서울특별시" && window.SEOUL_DISTRICTS) {
+    const d = window.SEOUL_DISTRICTS.find(x => x.name === name);
+    if (d) {
+      const bounds = new kakao.maps.LatLngBounds();
+      d.path.forEach(([la, ln]) => bounds.extend(new kakao.maps.LatLng(la, ln)));
+      map.setBounds(bounds);
+      return;
+    }
+  }
+  if (!mainGeocoder) mainGeocoder = new kakao.maps.services.Geocoder();
+  mainGeocoder.addressSearch(`${province} ${name}`, (result, status) => {
+    if (status === kakao.maps.services.Status.OK) {
+      map.setCenter(new kakao.maps.LatLng(result[0].y, result[0].x));
+      map.setLevel(8);
+    }
+  });
+}
+
+/* 지역(사업소) 버튼을 눌렀을 때, 그 지역에 해당하는 현장들이 모두 화면에 들어오도록 지도를 맞춥니다. */
+function fitMapToVisibleSites() {
+  if (!map) return;
+  const vis = visibleSites();
+  if (!vis.length) return;
+  const bounds = new kakao.maps.LatLngBounds();
+  vis.forEach(s => {
+    const [lat, lng] = resolveLatLng(s);
+    bounds.extend(new kakao.maps.LatLng(lat, lng));
+    if (s.boundary && s.boundary.length > 2) {
+      s.boundary.forEach(([la, ln]) => bounds.extend(new kakao.maps.LatLng(la, ln)));
+    }
+  });
+  map.setBounds(bounds);
 }
 
 /* ---------- 지역(사업소) 빠른 필터 버튼 ---------- */
@@ -465,6 +557,7 @@ function renderRegionButtons() {
       regionFilter = btn.dataset.region;
       renderRegionButtons(); renderTabsBar(); renderStatsBar();
       renderMarkers(); renderSiteList();
+      fitMapToVisibleSites();
     });
   });
 }
