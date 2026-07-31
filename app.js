@@ -689,7 +689,7 @@ function focusSite(site) {
 /* ---------- 마커 렌더링 ---------- */
 /* ---------- 서울시 자치구 경계 + 권역 색상 + 현장 수 라벨 ---------- */
 let districtLayer = [];
-const REGION_PALETTE = ["#c9a7f0", "#f3d9a4", "#a7c9f0", "#a7f0c0", "#f0a7c0", "#d0d0d0"];
+const REGION_PALETTE = ["#8b5cf6", "#f59e0b", "#3b82f6", "#10b981", "#ec4899", "#64748b"];
 const REGION_COLOR_KEY = "dashboard_region_colors_v1";
 let customRegionColors = {};
 try { customRegionColors = JSON.parse(localStorage.getItem(REGION_COLOR_KEY)) || {}; } catch (e) { customRegionColors = {}; }
@@ -728,8 +728,8 @@ function renderDistrictOverlay() {
     const path = d.path.map(([la, ln]) => new kakao.maps.LatLng(la, ln));
     const color = getRegionColor(dominantOffice(d.name));
     const polygon = new kakao.maps.Polygon({
-      path, strokeWeight: 1.5, strokeColor: "#ffffff", strokeOpacity: 0.9,
-      fillColor: color, fillOpacity: 0.45, zIndex: 0
+      path, strokeWeight: 2, strokeColor: "#ffffff", strokeOpacity: 1,
+      fillColor: color, fillOpacity: 0.65, zIndex: 0
     });
     polygon.setMap(map);
     districtLayer.push(polygon);
