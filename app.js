@@ -724,19 +724,19 @@ function renderDistrictOverlay() {
   districtLayer = [];
 
   const vis = visibleSites();
-  const NEUTRAL_COLOR = "#cbd5e1";
+  const NEUTRAL_COLOR = "#94a3b8";
 
   window.SEOUL_DISTRICTS.forEach(d => {
     const path = d.path.map(([la, ln]) => new kakao.maps.LatLng(la, ln));
     const office = dominantOffice(d.name);
-    const isHighlighted = !!(regionFilter && office === regionFilter);
+    const isHighlighted = regionFilter ? (office === regionFilter) : !!office;
     const color = isHighlighted ? getRegionColor(office) : NEUTRAL_COLOR;
 
     const polygon = new kakao.maps.Polygon({
       path,
       strokeWeight: isHighlighted ? 2.5 : 1.5,
       strokeColor: "#ffffff", strokeOpacity: 1,
-      fillColor: color, fillOpacity: isHighlighted ? 0.65 : 0.25,
+      fillColor: color, fillOpacity: isHighlighted ? 0.65 : 0.4,
       zIndex: isHighlighted ? 1 : 0
     });
     polygon.setMap(map);
