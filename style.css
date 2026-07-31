@@ -199,6 +199,11 @@ body:not(.is-admin) .admin-only{display:none;}
 .province-buttons button:hover{background:var(--slate-100);}
 .province-buttons button.active{background:var(--accent);border-color:var(--accent);color:#fff;}
 .province-buttons button.span2{grid-column:1/-1;}
+.province-back{
+  border:none;background:transparent;color:var(--accent);cursor:pointer;
+  font-size:11.5px;font-weight:700;padding:0;margin-right:2px;
+}
+.district-grid{max-height:56vh;overflow-y:auto;}
 
 /* ===== Main layout ===== */
 #mainArea{
@@ -513,3 +518,7 @@ body:not(.is-admin) .admin-only{display:none;}
   #siteListPanel{display:none;}
   .form-grid{grid-template-columns:1fr;}
 }
+
+.bp-zonehit{padding:6px 8px;background:#fff;border:1px solid var(--slate-300);border-radius:6px;margin-bottom:4px;cursor:pointer;font-size:12px;color:var(--navy-950);}
+.bp-zonehit:hover{background:var(--slate-100);}
+.bp-zonehit .bp-cat{color:var(--slate-500);font-size:10.5px;margin-top:2px;}
