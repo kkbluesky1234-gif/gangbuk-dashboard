@@ -541,7 +541,7 @@ function renderUpcoming() {
       const site = sites.find(s => s.id === item.dataset.id);
       if (!site) return;
       panel.classList.add("hidden");
-      if (map) { const [lat, lng] = resolveLatLng(site); map.setCenter(new kakao.maps.LatLng(lat, lng)); }
+      focusSite(site);
       openSiteDetail(site.id);
     });
   });
@@ -576,6 +576,21 @@ function resolveLatLng(site) {
   const fb = DISTRICT_FALLBACK[site.district];
   if (fb) return fb;
   return [37.5665, 126.9780];
+}
+
+/* 현장 목록/일정에서 현장을 클릭했을 때, 지도를 그 현장 위치로 부드럽게 이동하며 확대합니다.
+   구역 경계 좌표가 있으면 그 경계 전체가 화면에 들어오도록, 없으면 대표 좌표로 확대합니다. */
+function focusSite(site) {
+  if (!map) return;
+  if (site.boundary && site.boundary.length > 2) {
+    const bounds = new kakao.maps.LatLngBounds();
+    site.boundary.forEach(([la, ln]) => bounds.extend(new kakao.maps.LatLng(la, ln)));
+    map.setBounds(bounds);
+  } else {
+    const [lat, lng] = resolveLatLng(site);
+    map.panTo(new kakao.maps.LatLng(lat, lng));
+    map.setLevel(3);
+  }
 }
 
 /* ---------- 마커 렌더링 ---------- */
@@ -756,8 +771,7 @@ function renderSiteList() {
       if (e.target.closest(".site-card-actions") || e.target.classList.contains("site-card-check")) return;
       const site = sites.find(s => s.id === id);
       if (!site) return;
-      const [lat, lng] = resolveLatLng(site);
-      if (map) map.setCenter(new kakao.maps.LatLng(lat, lng));
+      focusSite(site);
       openSiteDetail(site.id);
     });
     card.querySelector(".site-card-check")?.addEventListener("change", e => {
