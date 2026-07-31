@@ -1480,11 +1480,79 @@ function dateStamp() {
    ========================================================= */
 let bpMap, bpPolygon, bpMarkers = [], bpPoints = [], bpGeocoder;
 let bpCadastralOn = false;
+let bpAllZones = null;
+
+document.getElementById("bpGeojsonLoadBtn").addEventListener("click", () => {
+  document.getElementById("bpGeojsonFile").click();
+});
+document.getElementById("bpGeojsonFile").addEventListener("change", e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = evt => {
+    try {
+      bpAllZones = JSON.parse(evt.target.result);
+      document.getElementById("bpGeojsonStatus").textContent =
+        `${bpAllZones.features.length}개 구역 불러옴 — 위에서 구역명으로 검색하세요`;
+    } catch (err) {
+      alert("파일을 읽지 못했습니다: " + err.message);
+    }
+  };
+  reader.readAsText(file, "utf-8");
+});
+
+document.getElementById("bpZoneSearch").addEventListener("input", () => {
+  const q = document.getElementById("bpZoneSearch").value.trim();
+  const box = document.getElementById("bpZoneResults");
+  box.innerHTML = "";
+  if (!bpAllZones) {
+    if (q) box.innerHTML = '<div class="hint">먼저 "정비구역 geojson 불러오기"로 파일을 불러오세요.</div>';
+    return;
+  }
+  if (!q) return;
+  const hits = bpAllZones.features.filter(f => (f.properties.name || "").includes(q)).slice(0, 30);
+  if (hits.length === 0) {
+    box.innerHTML = '<div class="hint">일치하는 구역이 없습니다.</div>';
+    return;
+  }
+  hits.forEach(f => {
+    const row = document.createElement("div");
+    row.className = "bp-zonehit";
+    row.innerHTML = `${esc(f.properties.name)}<div class="bp-cat">${esc(f.properties.category || "")}</div>`;
+    row.addEventListener("click", () => bpLoadZoneFromGeojson(f));
+    box.appendChild(row);
+  });
+});
+
+function bpLoadZoneFromGeojson(feature) {
+  const ring = feature.geometry.coordinates[0]; // [lng, lat]
+  bpPoints = ring.map(([lng, lat]) => new kakao.maps.LatLng(lat, lng));
+  bpRedraw();
+  const bounds = new kakao.maps.LatLngBounds();
+  bpPoints.forEach(p => bounds.extend(p));
+  bpMap.setBounds(bounds);
+}
 
 const boundaryPickerModal = document.getElementById("boundaryPickerModal");
 
+async function bpEnsureZonesLoaded() {
+  if (bpAllZones) return;
+  document.getElementById("bpGeojsonStatus").textContent = "정비구역 데이터 불러오는 중...";
+  try {
+    const res = await fetch("seoul-zones.geojson");
+    if (!res.ok) throw new Error("not found");
+    bpAllZones = await res.json();
+    document.getElementById("bpGeojsonStatus").textContent =
+      `${bpAllZones.features.length}개 구역 자동 로딩됨 (2026.03.04 기준)`;
+  } catch (err) {
+    document.getElementById("bpGeojsonStatus").textContent =
+      "자동 로딩 실패 — 아래 버튼으로 직접 불러오세요";
+  }
+}
+
 function openBoundaryPicker() {
   boundaryPickerModal.classList.remove("hidden");
+  bpEnsureZonesLoaded();
 
   // 기존에 입력돼 있던 좌표가 있으면 그대로 불러와서 이어서 수정 가능
   const existingText = document.getElementById("f_boundary").value.trim();
