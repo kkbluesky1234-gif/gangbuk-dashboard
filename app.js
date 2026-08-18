@@ -2030,8 +2030,8 @@ function buildSiteCardHtml(site) {
 
   const hasBoundary = site.boundary && site.boundary.length > 2;
   const mapHtml = hasBoundary || (site.lat && site.lng)
-    ? `<div class="pc-mapbox" id="printCardMap"></div>`
-    : `<div class="pc-mapbox pc-mapbox-empty">구역 경계 좌표가 없어 지도를 표시할 수 없습니다.</div>`;
+    ? `<div class="pc-map-wrap"><div class="pc-mapbox" id="printCardMap"></div></div>`
+    : `<div class="pc-map-wrap"><div class="pc-mapbox pc-mapbox-empty">구역 경계 좌표가 없어 지도를 표시할 수 없습니다.</div></div>`;
 
   return `
 <div class="pc-sheet">
@@ -2045,16 +2045,17 @@ function buildSiteCardHtml(site) {
     <div class="pc-col pc-col-left">
       <table class="pc-tbl">
         <tr class="pc-pjrow">
-          <th class="pc-lbl" style="width:56px">PJ 명</th>
-          <td colspan="3">${pcVal(site.name)}</td>
-          <td>${pcVal(site.bizType || site.status)}</td>
+          <th class="pc-lbl" style="width:24px;border-right:none"></th>
+          <th class="pc-lbl" style="width:64px">PJ 명</th>
+          <td>${pcVal(site.name)}</td>
+          <td style="width:96px">${pcVal(site.bizType || site.status)}</td>
         </tr>
       </table>
 
       <table class="pc-tbl">
         <tr>
           <th class="pc-grp" rowspan="7">사업개요</th>
-          <th class="pc-lbl" style="width:66px">위 치</th>
+          <th class="pc-lbl" style="width:64px">위 치</th>
           <td class="pc-val" colspan="3">${pcVal(address)}</td>
         </tr>
         <tr>
@@ -2094,7 +2095,7 @@ function buildSiteCardHtml(site) {
       <table class="pc-tbl">
         <tr>
           <th class="pc-grp" rowspan="2">현황</th>
-          <th class="pc-lbl" style="width:66px">현건축물<br>현황</th>
+          <th class="pc-lbl" style="width:64px">현건축물<br>현황</th>
           <td class="pc-val-l" style="height:34px">${pcVal(site.currentBuilding)}</td>
         </tr>
         <tr>
@@ -2106,7 +2107,7 @@ function buildSiteCardHtml(site) {
       <table class="pc-tbl pc-tbl-grow">
         <tr>
           <th class="pc-grp" rowspan="${6 + Math.max(0, execs.length - 1)}">조합</th>
-          <th class="pc-lbl" style="width:66px">구 분</th>
+          <th class="pc-lbl" style="width:64px">구 분</th>
           <th class="pc-lbl">성명 / 업체명 / 연락처</th>
           <th class="pc-lbl" style="width:90px">특이사항</th>
         </tr>
@@ -2131,6 +2132,7 @@ function buildSiteCardHtml(site) {
           <td class="pc-val-l" colspan="2">${pcVal(site.otherCo)}</td>
         </tr>
       </table>
+      <div class="pc-left-fill"></div>
     </div>
 
     <!-- 중앙: 사업진행현황 + 지도 -->
