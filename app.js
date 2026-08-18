@@ -31,7 +31,12 @@ const FIELD_ORDER = [
   ["scale", "규모(층수 등)"], ["unionMembers", "조합원수"], ["lastLogDate", "최근 일지 날짜"],
   ["maintCo", "정비업체"], ["designCo", "설계업체"], ["trustCo", "신탁사"],
   ["manager", "담당자"], ["lat", "위도"], ["lng", "경도"], ["boundaryText", "구역 경계 좌표"],
-  ["nextEventDate", "다음 일정 날짜"], ["nextEventNote", "다음 일정 메모"], ["note", "비고"]
+  ["nextEventDate", "다음 일정 날짜"], ["nextEventNote", "다음 일정 메모"], ["note", "비고"],
+  ["address", "위치(지번주소)"], ["bizType", "사업방식 상세"], ["zoneUse", "지역지구"],
+  ["far", "용적률(%)"], ["bcr", "건폐율(%)"], ["parking", "주차대수"],
+  ["rentalUnits", "임대세대"], ["ltRentUnits", "장기전세세대"], ["rentalTotal", "임대계"],
+  ["currentBuilding", "현건축물 현황"], ["siteFeature", "입지특성"],
+  ["unionOffice", "조합 사무실"], ["specialNote", "특이사항"], ["competitor", "타사활동"]
 ];
 
 const PIPELINE_STAGES = ["미관리", "모니터링", "스크린", "중점", "입찰", "수주", "타사선정"];
@@ -1318,6 +1323,7 @@ function renderSiteDetail() {
   panel.innerHTML = `
     <div class="detail-top">
       <button class="detail-back">← 목록으로</button>
+      <button class="detail-card-print">📄 현장카드 인쇄</button>
       <button class="detail-print">🖨 인쇄</button>
     </div>
     <div class="detail-tags">
@@ -1415,6 +1421,7 @@ function renderSiteDetail() {
 
   panel.querySelector(".detail-back").addEventListener("click", closeSiteDetail);
   panel.querySelector(".detail-print").addEventListener("click", () => window.print());
+  panel.querySelector(".detail-card-print").addEventListener("click", () => printSiteCard(site));
   panel.querySelector("#detailEditBtn")?.addEventListener("click", () => openSiteModal(site.id));
 
   panel.querySelectorAll(".dtab").forEach(tabBtn => {
@@ -1534,8 +1541,54 @@ function openSiteModal(id) {
   set("f_note", site?.note);
   set("f_boundary", (site?.boundary || []).map(p => p.join(",")).join("\n"));
 
+  // 현장카드(인쇄 양식)용 항목
+  set("f_address", site?.address); set("f_bizType", site?.bizType); set("f_zoneUse", site?.zoneUse);
+  set("f_far", site?.far); set("f_bcr", site?.bcr); set("f_parking", site?.parking);
+  set("f_rentalUnits", site?.rentalUnits); set("f_ltRentUnits", site?.ltRentUnits);
+  set("f_rentalTotal", site?.rentalTotal);
+  set("f_currentBuilding", site?.currentBuilding); set("f_siteFeature", site?.siteFeature);
+  set("f_unionOffice", site?.unionOffice);
+  set("f_specialNote", site?.specialNote); set("f_competitor", site?.competitor);
+  renderExecRows(site?.executives || []);
+
   siteModal.classList.remove("hidden");
 }
+
+/* ---------- 집행부 입력 행 (여러 명 등록) ---------- */
+function renderExecRows(list) {
+  const box = document.getElementById("execRows");
+  if (!box) return;
+  box.innerHTML = (list || []).map((e, i) => execRowHtml(e, i)).join("");
+  bindExecRowDelete();
+}
+function execRowHtml(e, i) {
+  e = e || {};
+  return `<div class="exec-row" data-idx="${i}" style="display:flex;gap:4px;margin-bottom:4px;align-items:center">
+    <input class="ex-name" placeholder="성명/직위" value="${esc(e.name || "")}" style="flex:1;min-width:0">
+    <input class="ex-company" placeholder="업체" value="${esc(e.company || "")}" style="flex:1;min-width:0">
+    <input class="ex-phone" placeholder="연락처" value="${esc(e.phone || "")}" style="flex:1;min-width:0">
+    <input class="ex-note" placeholder="특이사항" value="${esc(e.note || "")}" style="flex:1;min-width:0">
+    <button type="button" class="ex-del btn btn-outline btn-sm">✕</button>
+  </div>`;
+}
+function bindExecRowDelete() {
+  document.querySelectorAll("#execRows .ex-del").forEach(btn => {
+    btn.onclick = () => { btn.closest(".exec-row").remove(); };
+  });
+}
+function collectExecRows() {
+  return [...document.querySelectorAll("#execRows .exec-row")].map(r => ({
+    name: r.querySelector(".ex-name").value.trim(),
+    company: r.querySelector(".ex-company").value.trim(),
+    phone: r.querySelector(".ex-phone").value.trim(),
+    note: r.querySelector(".ex-note").value.trim()
+  })).filter(e => e.name || e.company || e.phone || e.note);
+}
+document.getElementById("btnAddExec")?.addEventListener("click", () => {
+  const box = document.getElementById("execRows");
+  box.insertAdjacentHTML("beforeend", execRowHtml({}, box.children.length));
+  bindExecRowDelete();
+});
 function closeSiteModal() { siteModal.classList.add("hidden"); editingId = null; }
 
 document.getElementById("siteSave").addEventListener("click", () => {
@@ -1573,7 +1626,23 @@ document.getElementById("siteSave").addEventListener("click", () => {
     nextEventDate: document.getElementById("f_nextEventDate").value,
     nextEventNote: document.getElementById("f_nextEventNote").value.trim(),
     note: document.getElementById("f_note").value.trim(),
-    boundary
+    boundary,
+    // 현장카드(인쇄 양식)용 항목
+    address: document.getElementById("f_address").value.trim(),
+    bizType: document.getElementById("f_bizType").value.trim(),
+    zoneUse: document.getElementById("f_zoneUse").value.trim(),
+    far: document.getElementById("f_far").value.trim(),
+    bcr: document.getElementById("f_bcr").value.trim(),
+    parking: document.getElementById("f_parking").value,
+    rentalUnits: document.getElementById("f_rentalUnits").value,
+    ltRentUnits: document.getElementById("f_ltRentUnits").value,
+    rentalTotal: document.getElementById("f_rentalTotal").value,
+    currentBuilding: document.getElementById("f_currentBuilding").value.trim(),
+    siteFeature: document.getElementById("f_siteFeature").value.trim(),
+    unionOffice: document.getElementById("f_unionOffice").value.trim(),
+    specialNote: document.getElementById("f_specialNote").value.trim(),
+    competitor: document.getElementById("f_competitor").value.trim(),
+    executives: collectExecRows()
   };
 
   data.updatedAt = new Date().toISOString();
@@ -1902,3 +1971,234 @@ document.getElementById("boundaryPickerApply").addEventListener("click", () => {
 
 /* ---------- 시작 시 비밀번호 설정 불러오기 ---------- */
 loadAuthConfig();
+
+/* =========================================================
+   현장카드 인쇄 (A4 가로 1장)
+   상세 패널의 "현장카드 인쇄" 버튼에서 호출됩니다.
+   ========================================================= */
+let _printMapObj = null;
+
+function pcNum(v) {
+  if (v === undefined || v === null || v === "") return "";
+  const n = Number(v);
+  return isNaN(n) ? String(v) : n.toLocaleString("ko-KR");
+}
+function pcVal(v) { return (v === undefined || v === null || v === "") ? "" : esc(String(v)); }
+
+function buildSiteCardHtml(site) {
+  const loc = [site.city, site.district, site.dong].filter(Boolean).join(" ");
+  const address = site.address || loc || "";
+
+  // 세대 내역: 총 N세대 (임대 a / 장기전세 b / 계 c)
+  const subUnits = [];
+  if (site.rentalUnits) subUnits.push(`임대 ${pcNum(site.rentalUnits)}`);
+  if (site.ltRentUnits) subUnits.push(`장기전세 ${pcNum(site.ltRentUnits)}`);
+  if (site.rentalTotal) subUnits.push(`계 ${pcNum(site.rentalTotal)}세대`);
+  const unitsHtml = `${site.newUnits ? pcNum(site.newUnits) + "세대" : ""}` +
+    (subUnits.length ? `<span class="pc-sub">(${esc(subUnits.join(" / "))})</span>` : "");
+
+  // 사업진행현황: 추진경과(로컬 milestones) 날짜 오름차순
+  const progress = (site.milestones || [])
+    .filter(m => m.source !== "telegram")
+    .slice()
+    .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const progressHtml = progress.length
+    ? progress.map(m => `<div class="pc-prog-item">
+        <span class="pc-prog-date">${pcVal(m.date)}</span>
+        <span class="pc-prog-text">${pcVal(m.text)}</span>
+      </div>`).join("")
+    : `<div class="pc-empty">등록된 추진 경과가 없습니다.</div>`;
+
+  // 조합 - 집행부 여러 명
+  const execs = site.executives || [];
+  const execRowsHtml = execs.length
+    ? execs.map(e => `<tr>
+        <th class="pc-lbl">집행부</th>
+        <td class="pc-val-l">${pcVal([e.name, e.company].filter(Boolean).join(" / "))}${e.phone ? `<span class="pc-sub">${pcVal(e.phone)}</span>` : ""}</td>
+        <td class="pc-val-l">${pcVal(e.note)}</td>
+      </tr>`).join("")
+    : `<tr><th class="pc-lbl">집행부</th><td class="pc-val-l"></td><td class="pc-val-l"></td></tr>`;
+
+  const hasBoundary = site.boundary && site.boundary.length > 2;
+  const mapHtml = hasBoundary || (site.lat && site.lng)
+    ? `<div class="pc-mapbox" id="printCardMap"></div>`
+    : `<div class="pc-mapbox pc-mapbox-empty">구역 경계 좌표가 없어 지도를 표시할 수 없습니다.</div>`;
+
+  return `
+<div class="pc-sheet">
+  <div class="pc-head">
+    <div>현장명: ${pcVal(site.name)}</div>
+    <div class="pc-manager">담당: ${pcVal(site.manager)}</div>
+  </div>
+
+  <div class="pc-body">
+    <!-- 좌측: 사업개요 / 현황 / 조합 -->
+    <div class="pc-col">
+      <table class="pc-tbl">
+        <tr class="pc-pjrow">
+          <th class="pc-lbl" style="width:56px">PJ 명</th>
+          <td colspan="3">${pcVal(site.name)}</td>
+          <td>${pcVal(site.bizType || site.status)}</td>
+        </tr>
+      </table>
+
+      <table class="pc-tbl">
+        <tr>
+          <th class="pc-grp" rowspan="7">사업개요</th>
+          <th class="pc-lbl" style="width:66px">위 치</th>
+          <td class="pc-val" colspan="3">${pcVal(address)}</td>
+        </tr>
+        <tr>
+          <th class="pc-lbl">지역지구</th>
+          <td class="pc-val" colspan="3">${pcVal(site.zoneUse)}</td>
+        </tr>
+        <tr>
+          <th class="pc-lbl">구역면적<span class="pc-sub">(m²)</span></th>
+          <td class="pc-val">${pcNum(site.area)}${site.area ? " m²" : ""}</td>
+          <th class="pc-lbl" style="width:60px">조합원수</th>
+          <td class="pc-val">${site.unionMembers ? pcNum(site.unionMembers) + "명" : ""}</td>
+        </tr>
+        <tr>
+          <th class="pc-lbl">연면적<span class="pc-sub">(m²)</span></th>
+          <td class="pc-val">${pcNum(site.totalFloorArea)}${site.totalFloorArea ? " m²" : ""}</td>
+          <th class="pc-lbl">용 적 률</th>
+          <td class="pc-val">${site.far ? pcVal(site.far) + "%" : ""}</td>
+        </tr>
+        <tr>
+          <th class="pc-lbl">신축세대</th>
+          <td class="pc-val">${unitsHtml}</td>
+          <th class="pc-lbl">건 폐 율</th>
+          <td class="pc-val">${site.bcr ? pcVal(site.bcr) + "%" : ""}</td>
+        </tr>
+        <tr>
+          <th class="pc-lbl">주차대수</th>
+          <td class="pc-val">${pcNum(site.parking)}</td>
+          <th class="pc-lbl">기 타</th>
+          <td class="pc-val">${pcVal(site.scale)}</td>
+        </tr>
+        <tr>
+          <th class="pc-lbl">사업단계</th>
+          <td class="pc-val" colspan="3">${pcVal(site.stage)}${site.pipelineStage ? " / " + pcVal(site.pipelineStage) : ""}</td>
+        </tr>
+      </table>
+
+      <table class="pc-tbl">
+        <tr>
+          <th class="pc-grp" rowspan="2">현황</th>
+          <th class="pc-lbl" style="width:66px">현건축물<br>현황</th>
+          <td class="pc-val-l" style="height:34px">${pcVal(site.currentBuilding)}</td>
+        </tr>
+        <tr>
+          <th class="pc-lbl">입지특성</th>
+          <td class="pc-val-l" style="height:34px">${pcVal(site.siteFeature)}</td>
+        </tr>
+      </table>
+
+      <table class="pc-tbl">
+        <tr>
+          <th class="pc-grp" rowspan="${4 + Math.max(0, execs.length - 1)}">조합</th>
+          <th class="pc-lbl" style="width:66px">구 분</th>
+          <th class="pc-lbl">성명 / 업체명 / 연락처</th>
+          <th class="pc-lbl" style="width:90px">특이사항</th>
+        </tr>
+        <tr>
+          <th class="pc-lbl">사무실</th>
+          <td class="pc-val-l">${pcVal(site.unionOffice)}</td>
+          <td class="pc-val-l"></td>
+        </tr>
+        ${execRowsHtml}
+        <tr>
+          <th class="pc-lbl">정비업체</th>
+          <td class="pc-val-l">${pcVal(site.maintCo)}</td>
+          <td class="pc-val-l"></td>
+        </tr>
+        <tr>
+          <th class="pc-lbl">설계업체</th>
+          <td class="pc-val-l">${pcVal(site.designCo)}${site.trustCo ? `<span class="pc-sub">신탁사: ${pcVal(site.trustCo)}</span>` : ""}</td>
+          <td class="pc-val-l"></td>
+        </tr>
+      </table>
+    </div>
+
+    <!-- 중앙: 사업진행현황 + 지도 -->
+    <div class="pc-col">
+      <div class="pc-secthead">사업진행현황</div>
+      <div class="pc-prog">${progressHtml}</div>
+      ${mapHtml}
+    </div>
+
+    <!-- 우측: 그외 -->
+    <div class="pc-col">
+      <div class="pc-secthead">그외</div>
+      <div class="pc-note-block">
+        <div class="pc-note-title">■ 특이사항</div>
+        <div class="pc-note-body">${pcVal(site.specialNote)}</div>
+        <div class="pc-note-title">■ 타사활동</div>
+        <div class="pc-note-body">${pcVal(site.competitor)}</div>
+        ${site.note ? `<div class="pc-note-title">■ 비고</div><div class="pc-note-body">${pcVal(site.note)}</div>` : ""}
+      </div>
+    </div>
+  </div>
+</div>`;
+}
+
+function printSiteCard(site) {
+  const box = document.getElementById("printCard");
+  if (!box) { alert("인쇄 영역을 찾을 수 없습니다. index.html이 최신인지 확인해주세요."); return; }
+
+  box.innerHTML = buildSiteCardHtml(site);
+  box.style.display = "block"; // 지도 렌더링을 위해 잠시 화면에 올림
+  box.style.position = "fixed";
+  box.style.left = "-9999px";
+  box.style.top = "0";
+
+  const mapEl = document.getElementById("printCardMap");
+  const hasBoundary = site.boundary && site.boundary.length > 2;
+
+  const finish = () => {
+    box.style.position = "";
+    box.style.left = "";
+    box.style.top = "";
+    box.style.display = "";
+    window.print();
+  };
+
+  if (mapEl && typeof kakao !== "undefined" && kakao.maps) {
+    // 화면 밖에 두면 타일이 안 그려지므로, 인쇄 직전에만 화면 안쪽으로 옮김
+    box.style.left = "0";
+    box.style.top = "0";
+    box.style.zIndex = "-1";
+    box.style.opacity = "0.01";
+
+    _printMapObj = new kakao.maps.Map(mapEl, {
+      center: new kakao.maps.LatLng(37.5665, 126.9780), level: 5
+    });
+
+    if (hasBoundary) {
+      const path = site.boundary.map(([la, ln]) => new kakao.maps.LatLng(la, ln));
+      new kakao.maps.Polygon({
+        path, strokeWeight: 3, strokeColor: "#d32f2f", strokeOpacity: 1,
+        fillColor: "#d32f2f", fillOpacity: 0.15
+      }).setMap(_printMapObj);
+      const bounds = new kakao.maps.LatLngBounds();
+      path.forEach(p => bounds.extend(p));
+      _printMapObj.setBounds(bounds);
+    } else {
+      const [lat, lng] = resolveLatLng(site);
+      _printMapObj.setCenter(new kakao.maps.LatLng(lat, lng));
+      _printMapObj.setLevel(4);
+    }
+
+    // 타일이 다 그려질 시간을 준 뒤 인쇄
+    setTimeout(() => {
+      _printMapObj.relayout();
+      setTimeout(() => {
+        box.style.zIndex = "";
+        box.style.opacity = "";
+        finish();
+      }, 900);
+    }, 400);
+  } else {
+    finish();
+  }
+}
