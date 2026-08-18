@@ -62,11 +62,19 @@ function provinceOf(city) {
    SERVER_BASE_URL이 설정되어 있으면 "현장 데이터"도 서버(공유)에 저장/조회합니다.
    그러면 이 링크를 여는 모든 사람이 같은 최신 데이터를 보게 됩니다.
    서버가 없으면(SERVER_BASE_URL이 빈 값) 지금까지처럼 이 브라우저에만 저장됩니다. */
+function boundaryToFirestore(boundary) {
+  return (boundary || []).map(([la, ln]) => ({ lat: la, lng: ln }));
+}
+function boundaryFromFirestore(boundary) {
+  return (boundary || []).map(b => Array.isArray(b) ? b : [b.lat, b.lng]);
+}
+
 async function loadSites() {
   try {
     const snap = await firestoreSitesDoc.get();
     if (snap.exists) {
-      sites = Array.isArray(snap.data().sites) ? snap.data().sites : [];
+      const raw = Array.isArray(snap.data().sites) ? snap.data().sites : [];
+      sites = raw.map(s => ({ ...s, boundary: boundaryFromFirestore(s.boundary) }));
       localStorage.setItem(STORAGE_KEY, JSON.stringify(sites)); // 오프라인 대비 캐시
       return;
     }
@@ -83,7 +91,8 @@ function persist() {
   clearTimeout(_firestoreSyncTimer);
   _firestoreSyncTimer = setTimeout(async () => {
     try {
-      await firestoreSitesDoc.set({ sites, updatedAt: new Date().toISOString() });
+      const sanitized = sites.map(s => ({ ...s, boundary: boundaryToFirestore(s.boundary) }));
+      await firestoreSitesDoc.set({ sites: sanitized, updatedAt: new Date().toISOString() });
     } catch (e) {
       console.warn("Firebase에 현장 데이터 저장 실패(로컬에는 저장됨):", e);
     }
