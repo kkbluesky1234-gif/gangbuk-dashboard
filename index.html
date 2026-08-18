@@ -11,63 +11,74 @@
 #printCard { display: none; }
 
 #printCard .pc-sheet {
-  width: 297mm; min-height: 205mm; padding: 6mm 7mm;
+  width: 297mm; height: 200mm; padding: 4mm 6mm;
   box-sizing: border-box; background: #fff;
+  display: flex; flex-direction: column;
   font-family: "맑은 고딕", "Malgun Gothic", sans-serif;
-  color: #111; font-size: 10px; line-height: 1.35;
+  color: #111; font-size: 11px; line-height: 1.4;
 }
 #printCard .pc-head {
   display: flex; justify-content: space-between; align-items: flex-end;
-  font-size: 12px; font-weight: 700; margin-bottom: 4px;
+  font-size: 14px; font-weight: 700; margin-bottom: 5px; flex: none;
 }
-#printCard .pc-head .pc-manager { font-size: 11px; font-weight: 600; }
+#printCard .pc-head .pc-manager { font-size: 12px; font-weight: 600; }
 
 #printCard .pc-body {
   display: grid; grid-template-columns: 40% 36% 24%;
   border: 1px solid #7f7f7f; border-right: none;
+  flex: 1; min-height: 0;
 }
-#printCard .pc-col { border-right: 1px solid #7f7f7f; display: flex; flex-direction: column; }
+#printCard .pc-col {
+  border-right: 1px solid #7f7f7f;
+  display: flex; flex-direction: column; min-height: 0;
+}
+#printCard .pc-col-fill { flex: 1; }
 
 #printCard .pc-secthead {
   background: #fdf6d8; border-bottom: 1px solid #7f7f7f;
-  text-align: center; font-weight: 700; padding: 3px 0; font-size: 11px;
+  text-align: center; font-weight: 700; padding: 4px 0; font-size: 12px; flex: none;
 }
 #printCard table.pc-tbl { width: 100%; border-collapse: collapse; table-layout: fixed; }
+#printCard table.pc-tbl.pc-tbl-grow { height: 100%; }
 #printCard table.pc-tbl th, #printCard table.pc-tbl td {
-  border: 1px solid #7f7f7f; padding: 2px 4px; vertical-align: middle;
-  word-break: break-all; font-weight: 400;
+  border: 1px solid #7f7f7f; padding: 4px 5px; vertical-align: middle;
+  word-break: break-all; font-weight: 400; white-space: pre-wrap;
 }
 #printCard table.pc-tbl th.pc-grp {
-  background: #eaf3dc; width: 22px; font-weight: 700;
-  writing-mode: vertical-rl; text-orientation: upright; letter-spacing: 2px;
+  background: #eaf3dc; width: 24px; font-weight: 700;
+  writing-mode: vertical-rl; text-orientation: upright; letter-spacing: 3px;
 }
 #printCard table.pc-tbl th.pc-lbl { background: #eaf3dc; font-weight: 700; text-align: center; }
 #printCard table.pc-tbl td.pc-val { background: #fff; text-align: center; }
 #printCard table.pc-tbl td.pc-val-l { background: #fff; text-align: left; }
-#printCard .pc-sub { font-size: 8px; color: #444; display: block; }
+#printCard .pc-sub { font-size: 9px; color: #444; display: block; }
 
 #printCard .pc-pjrow th.pc-lbl { background: #fdf6d8; }
 #printCard .pc-pjrow td { background: #fdf6d8; text-align: center; font-weight: 600; }
 
-#printCard .pc-prog { padding: 3px 5px; }
-#printCard .pc-prog-item { display: flex; gap: 6px; margin-bottom: 2px; }
-#printCard .pc-prog-date { color: #2e7d32; white-space: nowrap; font-weight: 600; width: 74px; flex: none; }
+#printCard .pc-prog { padding: 5px 7px; flex: 1; min-height: 0; overflow: hidden; }
+#printCard .pc-prog-item { display: flex; gap: 7px; margin-bottom: 4px; }
+#printCard .pc-prog-date { color: #2e7d32; white-space: nowrap; font-weight: 600; width: 86px; flex: none; }
 #printCard .pc-prog-text { flex: 1; }
-#printCard .pc-empty { color: #888; padding: 4px 5px; }
+#printCard .pc-empty { color: #888; padding: 5px 7px; }
 
-#printCard .pc-mapbox { margin: 4px 5px 5px; border: 1px solid #7f7f7f; height: 62mm; }
+#printCard .pc-mapbox {
+  margin: 0 6px 6px; border: 1px solid #7f7f7f; height: 88mm; flex: none;
+}
 #printCard .pc-mapbox.pc-mapbox-empty {
   display: flex; align-items: center; justify-content: center; color: #888;
 }
-#printCard .pc-note-block { padding: 4px 6px; }
-#printCard .pc-note-title { font-weight: 700; margin-bottom: 2px; }
-#printCard .pc-note-body { white-space: pre-wrap; margin-bottom: 8px; }
+#printCard .pc-note-block { padding: 6px 8px; flex: 1; display: flex; flex-direction: column; }
+#printCard .pc-note-title { font-weight: 700; margin-bottom: 3px; }
+#printCard .pc-note-body { white-space: pre-wrap; margin-bottom: 12px; }
+#printCard .pc-note-fill { flex: 1; }
 
 @media print {
   body > *:not(#printCard) { display: none !important; }
   #printCard { display: block !important; }
-  #printCard .pc-sheet { width: auto; min-height: auto; padding: 0; }
-  @page { size: A4 landscape; margin: 8mm; }
+  #printCard .pc-sheet { width: auto; height: 100%; padding: 0; }
+  html, body { height: 100%; }
+  @page { size: A4 landscape; margin: 7mm; }
   * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
 }
 </style>
@@ -241,13 +252,13 @@
 
       <label>구역면적(m²)<input id="f_area" type="number" step="any"></label>
       <label>연면적(m²)<input id="f_totalFloorArea" type="number" step="any"></label>
-      <label>용적률(%)<input id="f_far" placeholder="예: 418.51"></label>
-      <label>건폐율(%)<input id="f_bcr" placeholder="예: 22.83"></label>
+      <label>용적률<input id="f_far" placeholder="예: 234.94% 이하 / 법정상한(250.00%)"></label>
+      <label>건폐율<input id="f_bcr" placeholder="예: 22.09% / 법정 60%"></label>
 
-      <label>조합원수<input id="f_unionMembers" type="number"></label>
-      <label>주차대수<input id="f_parking" type="number"></label>
+      <label>조합원수<input id="f_unionMembers" placeholder="예: 402명(395) -384명-"></label>
+      <label>주차대수<input id="f_parking" placeholder="예: 총 938대(공동주택 913, 근린 25대)"></label>
       <label>신축세대(총)<input id="f_newUnits" type="number"></label>
-      <label>규모/기타(층수 등)<input id="f_scale" placeholder="예: 지하3층, 지상49층(150m이하)"></label>
+      <label>규모/기타(층수 등)<input id="f_scale" placeholder="예: 지하3층~지상26층 10개동[703세대]"></label>
 
       <label>임대 세대<input id="f_rentalUnits" type="number"></label>
       <label>장기전세 세대<input id="f_ltRentUnits" type="number"></label>
@@ -266,8 +277,10 @@
       </div>
 
       <label>정비업체<input id="f_maintCo"></label>
+      <label>총회대행<input id="f_meetingCo" placeholder="예: 조합진행"></label>
       <label>설계업체<input id="f_designCo"></label>
       <label>신탁사<input id="f_trustCo"></label>
+      <label class="span2">그외업체<input id="f_otherCo" placeholder="예: 변호사 : 바른 / 법무사 : 우영 / 회계사 : 정일"></label>
       <label>최근 일지 날짜<input id="f_lastLogDate" type="date"></label>
 
       <label>담당자<input id="f_manager" list="managerDatalist"></label>
