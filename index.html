@@ -11,7 +11,7 @@
 #printCard { display: none; }
 
 #printCard .pc-sheet {
-  width: 297mm; height: 200mm; padding: 4mm 6mm;
+  width: 283mm; height: 190mm; padding: 0;
   box-sizing: border-box; background: #fff;
   display: flex; flex-direction: column;
   font-family: "맑은 고딕", "Malgun Gothic", sans-serif;
@@ -33,6 +33,9 @@
   display: flex; flex-direction: column; min-height: 0;
 }
 #printCard .pc-col-fill { flex: 1; }
+#printCard .pc-col-left > table:last-of-type { flex: 1; }
+#printCard .pc-col-left > table:last-of-type td,
+#printCard .pc-col-left > table:last-of-type th { vertical-align: top; }
 
 #printCard .pc-secthead {
   background: #fdf6d8; border-bottom: 1px solid #7f7f7f;
@@ -74,10 +77,24 @@
 #printCard .pc-note-fill { flex: 1; }
 
 @media print {
+  html, body { height: auto !important; margin: 0 !important; padding: 0 !important; }
   body > *:not(#printCard) { display: none !important; }
   #printCard { display: block !important; }
-  #printCard .pc-sheet { width: auto; height: 100%; padding: 0; }
-  html, body { height: 100%; }
+  #printCard .pc-sheet {
+    width: 100% !important;
+    height: 190mm !important;
+    min-height: 190mm !important;
+    padding: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    page-break-after: avoid;
+  }
+  #printCard .pc-body {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    align-items: stretch !important;
+  }
+  #printCard .pc-col { height: 100% !important; }
   @page { size: A4 landscape; margin: 7mm; }
   * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
 }
