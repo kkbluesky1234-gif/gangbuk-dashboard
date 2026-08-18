@@ -36,7 +36,8 @@ const FIELD_ORDER = [
   ["far", "용적률(%)"], ["bcr", "건폐율(%)"], ["parking", "주차대수"],
   ["rentalUnits", "임대세대"], ["ltRentUnits", "장기전세세대"], ["rentalTotal", "임대계"],
   ["currentBuilding", "현건축물 현황"], ["siteFeature", "입지특성"],
-  ["unionOffice", "조합 사무실"], ["specialNote", "특이사항"], ["competitor", "타사활동"]
+  ["unionOffice", "조합 사무실"], ["specialNote", "특이사항"], ["competitor", "타사활동"],
+  ["meetingCo", "총회대행"], ["otherCo", "그외업체"]
 ];
 
 const PIPELINE_STAGES = ["미관리", "모니터링", "스크린", "중점", "입찰", "수주", "타사선정"];
@@ -1548,6 +1549,7 @@ function openSiteModal(id) {
   set("f_rentalTotal", site?.rentalTotal);
   set("f_currentBuilding", site?.currentBuilding); set("f_siteFeature", site?.siteFeature);
   set("f_unionOffice", site?.unionOffice);
+  set("f_meetingCo", site?.meetingCo); set("f_otherCo", site?.otherCo);
   set("f_specialNote", site?.specialNote); set("f_competitor", site?.competitor);
   renderExecRows(site?.executives || []);
 
@@ -1640,6 +1642,8 @@ document.getElementById("siteSave").addEventListener("click", () => {
     currentBuilding: document.getElementById("f_currentBuilding").value.trim(),
     siteFeature: document.getElementById("f_siteFeature").value.trim(),
     unionOffice: document.getElementById("f_unionOffice").value.trim(),
+    meetingCo: document.getElementById("f_meetingCo").value.trim(),
+    otherCo: document.getElementById("f_otherCo").value.trim(),
     specialNote: document.getElementById("f_specialNote").value.trim(),
     competitor: document.getElementById("f_competitor").value.trim(),
     executives: collectExecRows()
@@ -1984,6 +1988,11 @@ function pcNum(v) {
   return isNaN(n) ? String(v) : n.toLocaleString("ko-KR");
 }
 function pcVal(v) { return (v === undefined || v === null || v === "") ? "" : esc(String(v)); }
+function pyeong(m2) {
+  const n = Number(m2);
+  if (!n || isNaN(n)) return "";
+  return `<span class="pc-sub">평수 : ${Math.round(n / 3.305785).toLocaleString("ko-KR")}</span>`;
+}
 
 function buildSiteCardHtml(site) {
   const loc = [site.city, site.district, site.dong].filter(Boolean).join(" ");
@@ -2033,7 +2042,7 @@ function buildSiteCardHtml(site) {
 
   <div class="pc-body">
     <!-- 좌측: 사업개요 / 현황 / 조합 -->
-    <div class="pc-col">
+    <div class="pc-col pc-col-left">
       <table class="pc-tbl">
         <tr class="pc-pjrow">
           <th class="pc-lbl" style="width:56px">PJ 명</th>
@@ -2054,25 +2063,25 @@ function buildSiteCardHtml(site) {
         </tr>
         <tr>
           <th class="pc-lbl">구역면적<span class="pc-sub">(m²)</span></th>
-          <td class="pc-val">${pcNum(site.area)}${site.area ? " m²" : ""}</td>
+          <td class="pc-val">${pcNum(site.area)}${site.area ? " m²" : ""}${pyeong(site.area)}</td>
           <th class="pc-lbl" style="width:60px">조합원수</th>
-          <td class="pc-val">${site.unionMembers ? pcNum(site.unionMembers) + "명" : ""}</td>
+          <td class="pc-val">${pcVal(site.unionMembers)}</td>
         </tr>
         <tr>
           <th class="pc-lbl">연면적<span class="pc-sub">(m²)</span></th>
-          <td class="pc-val">${pcNum(site.totalFloorArea)}${site.totalFloorArea ? " m²" : ""}</td>
+          <td class="pc-val">${pcNum(site.totalFloorArea)}${site.totalFloorArea ? " m²" : ""}${pyeong(site.totalFloorArea)}</td>
           <th class="pc-lbl">용 적 률</th>
-          <td class="pc-val">${site.far ? pcVal(site.far) + "%" : ""}</td>
+          <td class="pc-val">${pcVal(site.far)}</td>
         </tr>
         <tr>
           <th class="pc-lbl">신축세대</th>
           <td class="pc-val">${unitsHtml}</td>
           <th class="pc-lbl">건 폐 율</th>
-          <td class="pc-val">${site.bcr ? pcVal(site.bcr) + "%" : ""}</td>
+          <td class="pc-val">${pcVal(site.bcr)}</td>
         </tr>
         <tr>
           <th class="pc-lbl">주차대수</th>
-          <td class="pc-val">${pcNum(site.parking)}</td>
+          <td class="pc-val">${pcVal(site.parking)}</td>
           <th class="pc-lbl">기 타</th>
           <td class="pc-val">${pcVal(site.scale)}</td>
         </tr>
@@ -2094,9 +2103,9 @@ function buildSiteCardHtml(site) {
         </tr>
       </table>
 
-      <table class="pc-tbl">
+      <table class="pc-tbl pc-tbl-grow">
         <tr>
-          <th class="pc-grp" rowspan="${4 + Math.max(0, execs.length - 1)}">조합</th>
+          <th class="pc-grp" rowspan="${6 + Math.max(0, execs.length - 1)}">조합</th>
           <th class="pc-lbl" style="width:66px">구 분</th>
           <th class="pc-lbl">성명 / 업체명 / 연락처</th>
           <th class="pc-lbl" style="width:90px">특이사항</th>
@@ -2110,12 +2119,16 @@ function buildSiteCardHtml(site) {
         <tr>
           <th class="pc-lbl">정비업체</th>
           <td class="pc-val-l">${pcVal(site.maintCo)}</td>
-          <td class="pc-val-l"></td>
+          <td class="pc-val-l">${site.meetingCo ? "총회대행: " + pcVal(site.meetingCo) : ""}</td>
         </tr>
         <tr>
           <th class="pc-lbl">설계업체</th>
           <td class="pc-val-l">${pcVal(site.designCo)}${site.trustCo ? `<span class="pc-sub">신탁사: ${pcVal(site.trustCo)}</span>` : ""}</td>
           <td class="pc-val-l"></td>
+        </tr>
+        <tr>
+          <th class="pc-lbl">그외업체</th>
+          <td class="pc-val-l" colspan="2">${pcVal(site.otherCo)}</td>
         </tr>
       </table>
     </div>
@@ -2124,6 +2137,7 @@ function buildSiteCardHtml(site) {
     <div class="pc-col">
       <div class="pc-secthead">사업진행현황</div>
       <div class="pc-prog">${progressHtml}</div>
+      <div class="pc-col-fill"></div>
       ${mapHtml}
     </div>
 
@@ -2136,6 +2150,7 @@ function buildSiteCardHtml(site) {
         <div class="pc-note-title">■ 타사활동</div>
         <div class="pc-note-body">${pcVal(site.competitor)}</div>
         ${site.note ? `<div class="pc-note-title">■ 비고</div><div class="pc-note-body">${pcVal(site.note)}</div>` : ""}
+        <div class="pc-note-fill"></div>
       </div>
     </div>
   </div>
