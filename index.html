@@ -5,6 +5,72 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>시장모니터링 대시보드</title>
 <link rel="stylesheet" href="style.css">
+
+<!-- ===== 현장카드(인쇄 양식) 전용 스타일 ===== -->
+<style>
+#printCard { display: none; }
+
+#printCard .pc-sheet {
+  width: 297mm; min-height: 205mm; padding: 6mm 7mm;
+  box-sizing: border-box; background: #fff;
+  font-family: "맑은 고딕", "Malgun Gothic", sans-serif;
+  color: #111; font-size: 10px; line-height: 1.35;
+}
+#printCard .pc-head {
+  display: flex; justify-content: space-between; align-items: flex-end;
+  font-size: 12px; font-weight: 700; margin-bottom: 4px;
+}
+#printCard .pc-head .pc-manager { font-size: 11px; font-weight: 600; }
+
+#printCard .pc-body {
+  display: grid; grid-template-columns: 40% 36% 24%;
+  border: 1px solid #7f7f7f; border-right: none;
+}
+#printCard .pc-col { border-right: 1px solid #7f7f7f; display: flex; flex-direction: column; }
+
+#printCard .pc-secthead {
+  background: #fdf6d8; border-bottom: 1px solid #7f7f7f;
+  text-align: center; font-weight: 700; padding: 3px 0; font-size: 11px;
+}
+#printCard table.pc-tbl { width: 100%; border-collapse: collapse; table-layout: fixed; }
+#printCard table.pc-tbl th, #printCard table.pc-tbl td {
+  border: 1px solid #7f7f7f; padding: 2px 4px; vertical-align: middle;
+  word-break: break-all; font-weight: 400;
+}
+#printCard table.pc-tbl th.pc-grp {
+  background: #eaf3dc; width: 22px; font-weight: 700;
+  writing-mode: vertical-rl; text-orientation: upright; letter-spacing: 2px;
+}
+#printCard table.pc-tbl th.pc-lbl { background: #eaf3dc; font-weight: 700; text-align: center; }
+#printCard table.pc-tbl td.pc-val { background: #fff; text-align: center; }
+#printCard table.pc-tbl td.pc-val-l { background: #fff; text-align: left; }
+#printCard .pc-sub { font-size: 8px; color: #444; display: block; }
+
+#printCard .pc-pjrow th.pc-lbl { background: #fdf6d8; }
+#printCard .pc-pjrow td { background: #fdf6d8; text-align: center; font-weight: 600; }
+
+#printCard .pc-prog { padding: 3px 5px; }
+#printCard .pc-prog-item { display: flex; gap: 6px; margin-bottom: 2px; }
+#printCard .pc-prog-date { color: #2e7d32; white-space: nowrap; font-weight: 600; width: 74px; flex: none; }
+#printCard .pc-prog-text { flex: 1; }
+#printCard .pc-empty { color: #888; padding: 4px 5px; }
+
+#printCard .pc-mapbox { margin: 4px 5px 5px; border: 1px solid #7f7f7f; height: 62mm; }
+#printCard .pc-mapbox.pc-mapbox-empty {
+  display: flex; align-items: center; justify-content: center; color: #888;
+}
+#printCard .pc-note-block { padding: 4px 6px; }
+#printCard .pc-note-title { font-weight: 700; margin-bottom: 2px; }
+#printCard .pc-note-body { white-space: pre-wrap; margin-bottom: 8px; }
+
+@media print {
+  body > *:not(#printCard) { display: none !important; }
+  #printCard { display: block !important; }
+  #printCard .pc-sheet { width: auto; min-height: auto; padding: 0; }
+  @page { size: A4 landscape; margin: 8mm; }
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+}
+</style>
 </head>
 <body>
 
@@ -133,6 +199,7 @@
       <label>도시 *<input id="f_city" required></label>
       <label>구 *<input id="f_district" list="districtDatalist" required></label>
       <label>동(선택, 지도 단계별 그룹핑용)<input id="f_dong"></label>
+      <label class="span2">위치(지번 주소)<input id="f_address" placeholder="예: 녹번동 150-5번지 일원"></label>
       <label>사업소(권역)<select id="f_office"></select></label>
 
       <label>파이프라인 단계
@@ -169,18 +236,39 @@
           <option value="기타">기타</option>
         </select>
       </label>
-      <label>면적(m²)<input id="f_area" type="number" step="any"></label>
+      <label>사업방식 상세(인쇄용)<input id="f_bizType" placeholder="예: 재개발(도시정비형)"></label>
+      <label class="span2">지역지구<input id="f_zoneUse" placeholder="예: 제1종, 제2종(7층이하), 제2종, 제3종일반, 준주거지역"></label>
+
+      <label>구역면적(m²)<input id="f_area" type="number" step="any"></label>
+      <label>연면적(m²)<input id="f_totalFloorArea" type="number" step="any"></label>
+      <label>용적률(%)<input id="f_far" placeholder="예: 418.51"></label>
+      <label>건폐율(%)<input id="f_bcr" placeholder="예: 22.83"></label>
+
+      <label>조합원수<input id="f_unionMembers" type="number"></label>
+      <label>주차대수<input id="f_parking" type="number"></label>
+      <label>신축세대(총)<input id="f_newUnits" type="number"></label>
+      <label>규모/기타(층수 등)<input id="f_scale" placeholder="예: 지하3층, 지상49층(150m이하)"></label>
+
+      <label>임대 세대<input id="f_rentalUnits" type="number"></label>
+      <label>장기전세 세대<input id="f_ltRentUnits" type="number"></label>
+      <label>임대 계(합계)<input id="f_rentalTotal" type="number"></label>
       <label>예상발주<input id="f_expectedOrder" placeholder="예: 2026-Q4"></label>
 
-      <label>신축세대<input id="f_newUnits" type="number"></label>
-      <label>연면적(m²)<input id="f_totalFloorArea" type="number" step="any"></label>
-      <label>규모(층수 등)<input id="f_scale" placeholder="예: 지하3층~지상25층"></label>
-      <label>조합원수<input id="f_unionMembers" type="number"></label>
+      <label class="span2">현건축물 현황<textarea id="f_currentBuilding" rows="2"></textarea></label>
+      <label class="span2">입지특성<textarea id="f_siteFeature" rows="2"></textarea></label>
 
-      <label>최근 일지 날짜<input id="f_lastLogDate" type="date"></label>
+      <label class="span2">조합 사무실(주소/연락처)<input id="f_unionOffice" placeholder="예: 서울시 강북구 번동 148-199"></label>
+
+      <div class="span2">
+        <label style="display:block;margin-bottom:4px">집행부 (여러 명 등록 가능)</label>
+        <div id="execRows"></div>
+        <button type="button" id="btnAddExec" class="btn btn-outline btn-sm">+ 집행부 추가</button>
+      </div>
+
       <label>정비업체<input id="f_maintCo"></label>
       <label>설계업체<input id="f_designCo"></label>
       <label>신탁사<input id="f_trustCo"></label>
+      <label>최근 일지 날짜<input id="f_lastLogDate" type="date"></label>
 
       <label>담당자<input id="f_manager" list="managerDatalist"></label>
       <label>위도(선택, 정확한 위치)<input id="f_lat" type="number" step="any"></label>
@@ -188,6 +276,9 @@
 
       <label>다음 일정 날짜<input id="f_nextEventDate" type="date"></label>
       <label>다음 일정 메모<input id="f_nextEventNote" placeholder="예: 조합 방문, 입찰설명회"></label>
+
+      <label class="span2">특이사항(인쇄 우측 상단)<textarea id="f_specialNote" rows="2"></textarea></label>
+      <label class="span2">타사활동(인쇄 우측 하단)<textarea id="f_competitor" rows="2" placeholder="예: GS : 김희진(주1회)"></textarea></label>
 
       <label class="span2">비고<textarea id="f_note" rows="2"></textarea></label>
       <label class="span2">
@@ -330,6 +421,9 @@
     </div>
   </div>
 </div>
+
+<!-- ===== 현장카드 인쇄 영역 (평소에는 화면에 보이지 않음) ===== -->
+<div id="printCard"></div>
 
 <datalist id="districtDatalist"></datalist>
 <datalist id="managerDatalist"></datalist>
