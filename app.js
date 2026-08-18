@@ -1,14 +1,21 @@
 /* =========================================================
    시장모니터링 대시보드 — app.js
-   데이터는 브라우저 localStorage에 저장됩니다.
-   "백업 저장"으로 JSON 파일을 내려받아 다른 PC/브라우저로
-   옮기거나, 버전 관리를 위해 보관하세요.
+   현장 데이터는 Firebase Firestore에 저장됩니다(로컬은 캐시용).
+   비밀번호(관리자 / Guest)도 Firestore에 저장되어,
+   관리자 화면에서 바꾸면 모든 기기에 즉시 반영됩니다.
    ========================================================= */
 
 const STORAGE_KEY = "dashboard_sites_v1";
 const OFFICE_KEY = "dashboard_office_name_v1";
-const PW_KEY = "dashboard_admin_pw_v1";
-const DEFAULT_PW = "1234"; // 최초 접속 시 관리자 비밀번호. 접속 후 반드시 바꾸세요 (아래 changeAdminPassword 참고).
+
+/* 비밀번호 관련 --------------------------------------------
+   아래 두 값은 "최초 1회"만 쓰이는 기본 비밀번호입니다.
+   Firestore에 비밀번호가 저장되고 나면 이 값은 더 이상 사용되지 않습니다.
+   첫 로그인 후 반드시 관리자 화면의 "비밀번호 변경"으로 바꾸세요. */
+const DEFAULT_ADMIN_PW = "admin1234";
+const DEFAULT_GUEST_PW = "guest1234";
+const AUTH_CACHE_KEY = "dashboard_auth_cache_v1";
+const AUTH_DOC_ID = "auth_v1";
 
 /* 텔레그램 일지 서버 연동 (선택 사항)
    Render 등에 배포한 서버 주소를 넣으면, 현장 상세 패널을 열 때
@@ -58,10 +65,7 @@ function provinceOf(city) {
   return "";
 }
 
-/* ---------- 저장/로드 ----------
-   SERVER_BASE_URL이 설정되어 있으면 "현장 데이터"도 서버(공유)에 저장/조회합니다.
-   그러면 이 링크를 여는 모든 사람이 같은 최신 데이터를 보게 됩니다.
-   서버가 없으면(SERVER_BASE_URL이 빈 값) 지금까지처럼 이 브라우저에만 저장됩니다. */
+/* ---------- 저장/로드 ---------- */
 function boundaryToFirestore(boundary) {
   return (boundary || []).map(([la, ln]) => ({ lat: la, lng: ln }));
 }
@@ -102,31 +106,98 @@ function uid() {
   return "s_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
 
+/* =========================================================
+   비밀번호 설정 (Firestore 공유)
+   dashboard/auth_v1 문서에 { adminPw, guestPw } 형태로 저장됩니다.
+   ========================================================= */
+let authConfig = { adminPw: DEFAULT_ADMIN_PW, guestPw: DEFAULT_GUEST_PW };
+let authLoaded = false;
+
+try {
+  const cached = JSON.parse(localStorage.getItem(AUTH_CACHE_KEY));
+  if (cached && cached.adminPw) authConfig = { ...authConfig, ...cached };
+} catch (e) { /* 캐시 없음 */ }
+
+function authDocRef() {
+  try {
+    if (typeof firestoreSitesDoc !== "undefined" && firestoreSitesDoc && firestoreSitesDoc.parent) {
+      return firestoreSitesDoc.parent.doc(AUTH_DOC_ID);
+    }
+    return firebase.firestore().collection("dashboard").doc(AUTH_DOC_ID);
+  } catch (e) {
+    console.warn("Firebase 연결이 준비되지 않았습니다.", e);
+    return null;
+  }
+}
+
+async function loadAuthConfig() {
+  const ref = authDocRef();
+  if (!ref) { authLoaded = true; return; }
+  try {
+    const snap = await ref.get();
+    if (snap.exists) {
+      const d = snap.data() || {};
+      authConfig = {
+        adminPw: d.adminPw || DEFAULT_ADMIN_PW,
+        guestPw: d.guestPw || DEFAULT_GUEST_PW
+      };
+      localStorage.setItem(AUTH_CACHE_KEY, JSON.stringify(authConfig));
+    } else {
+      // 최초 실행: 기본 비밀번호로 문서를 만들어 둡니다.
+      await ref.set(authConfig);
+      localStorage.setItem(AUTH_CACHE_KEY, JSON.stringify(authConfig));
+      console.log("비밀번호 설정을 새로 만들었습니다. 관리자 화면에서 꼭 변경하세요.");
+    }
+  } catch (e) {
+    console.warn("비밀번호 설정을 불러오지 못했습니다. 저장된 값/기본값을 사용합니다.", e);
+  }
+  authLoaded = true;
+}
+
+async function saveAuthConfig() {
+  const ref = authDocRef();
+  if (!ref) throw new Error("Firebase에 연결되어 있지 않습니다.");
+  await ref.set(authConfig);
+  localStorage.setItem(AUTH_CACHE_KEY, JSON.stringify(authConfig));
+}
+
 /* ---------- 로그인 ---------- */
 const loginGate = document.getElementById("loginGate");
 const pwBox = document.getElementById("pwBox");
 const pwInput = document.getElementById("pwInput");
 const pwError = document.getElementById("pwError");
 
-document.getElementById("chooseGuest").addEventListener("click", () => enterApp(false));
-document.getElementById("chooseAdmin").addEventListener("click", () => {
+let pendingRole = null; // "admin" 또는 "guest"
+
+function openPwBox(role) {
+  pendingRole = role;
   pwBox.classList.remove("hidden");
+  pwError.classList.add("hidden");
+  pwInput.value = "";
+  pwInput.placeholder = role === "admin" ? "관리자 비밀번호" : "Guest 비밀번호";
   pwInput.focus();
-});
+}
+
+document.getElementById("chooseGuest").addEventListener("click", () => openPwBox("guest"));
+document.getElementById("chooseAdmin").addEventListener("click", () => openPwBox("admin"));
+
 document.getElementById("pwCancel").addEventListener("click", () => {
   pwBox.classList.add("hidden");
   pwError.classList.add("hidden");
   pwInput.value = "";
+  pendingRole = null;
 });
-document.getElementById("pwConfirm").addEventListener("click", tryAdminLogin);
-pwInput.addEventListener("keydown", e => { if (e.key === "Enter") tryAdminLogin(); });
+document.getElementById("pwConfirm").addEventListener("click", tryLogin);
+pwInput.addEventListener("keydown", e => { if (e.key === "Enter") tryLogin(); });
 
-function tryAdminLogin() {
-  const stored = localStorage.getItem(PW_KEY) || DEFAULT_PW;
-  if (pwInput.value === stored) {
+async function tryLogin() {
+  if (!authLoaded) await loadAuthConfig();
+  const expected = pendingRole === "admin" ? authConfig.adminPw : authConfig.guestPw;
+  if (pwInput.value === expected) {
     pwError.classList.add("hidden");
-    enterApp(true);
+    enterApp(pendingRole === "admin");
   } else {
+    pwError.textContent = "비밀번호가 올바르지 않습니다.";
     pwError.classList.remove("hidden");
   }
 }
@@ -137,6 +208,8 @@ function enterApp(admin) {
   document.getElementById("modeBadge").textContent = admin ? "관리자" : "Guest";
   document.getElementById("modeBadge").classList.toggle("admin", admin);
   loginGate.classList.add("hidden");
+  pwBox.classList.add("hidden");
+  pwInput.value = "";
   initMap();
 }
 
@@ -144,6 +217,7 @@ document.getElementById("btnLogout").addEventListener("click", () => {
   loginGate.classList.remove("hidden");
   pwBox.classList.add("hidden");
   pwInput.value = "";
+  pendingRole = null;
 });
 
 document.getElementById("btnRefreshData").addEventListener("click", async () => {
@@ -154,10 +228,16 @@ document.getElementById("btnRefreshData").addEventListener("click", async () => 
   btn.disabled = false; btn.textContent = "🔄 새로고침";
 });
 
-// 콘솔에서 관리자 비밀번호를 바꾸고 싶을 때: changeAdminPassword("새비밀번호")
-window.changeAdminPassword = function (newPw) {
-  localStorage.setItem(PW_KEY, newPw);
+// 콘솔에서 비밀번호를 바꾸고 싶을 때: changeAdminPassword("새비밀번호") / changeGuestPassword("새비밀번호")
+window.changeAdminPassword = async function (newPw) {
+  authConfig.adminPw = newPw;
+  await saveAuthConfig();
   console.log("관리자 비밀번호가 변경되었습니다.");
+};
+window.changeGuestPassword = async function (newPw) {
+  authConfig.guestPw = newPw;
+  await saveAuthConfig();
+  console.log("Guest 비밀번호가 변경되었습니다.");
 };
 
 /* ---------- 텔레그램 일지 붙여넣기 ---------- */
@@ -324,35 +404,72 @@ document.getElementById("officeCleanApply").addEventListener("click", () => {
   officeCleanModal.classList.add("hidden");
 });
 
-/* ---------- 비밀번호 변경 (관리자 모드 내) ---------- */
+/* ---------- 비밀번호 변경 (관리자 모드 내) ----------
+   관리자 비밀번호 / Guest 비밀번호를 골라서 바꿀 수 있습니다.
+   변경 시 반드시 "현재 관리자 비밀번호"를 입력해야 합니다.
+   저장하면 Firestore에 반영되어 모든 기기에 즉시 적용됩니다. */
 const pwChangeModal = document.getElementById("pwChangeModal");
 const pwChangeMsg = document.getElementById("pwChangeMsg");
 
+function ensurePwTargetSelect() {
+  if (document.getElementById("pwTarget")) return;
+  const oldInput = document.getElementById("pwOld");
+  if (!oldInput) return;
+
+  const wrap = document.createElement("div");
+  wrap.style.marginBottom = "12px";
+  wrap.innerHTML = `
+    <label style="display:block;font-size:13px;margin-bottom:4px;font-weight:600">변경할 비밀번호</label>
+    <select id="pwTarget" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px">
+      <option value="admin">관리자 비밀번호</option>
+      <option value="guest">Guest 비밀번호</option>
+    </select>`;
+
+  let anchor = oldInput;
+  const prev = oldInput.previousElementSibling;
+  if (prev && prev.tagName === "LABEL") anchor = prev;
+  anchor.parentElement.insertBefore(wrap, anchor);
+}
+
 document.getElementById("btnChangePw").addEventListener("click", () => {
+  ensurePwTargetSelect();
   document.getElementById("pwOld").value = "";
   document.getElementById("pwNew").value = "";
   document.getElementById("pwNew2").value = "";
+  const t = document.getElementById("pwTarget");
+  if (t) t.value = "admin";
   pwChangeMsg.classList.add("hidden");
   pwChangeModal.classList.remove("hidden");
 });
 document.getElementById("pwChangeCancel").addEventListener("click", () => {
   pwChangeModal.classList.add("hidden");
 });
-document.getElementById("pwChangeConfirm").addEventListener("click", () => {
-  const stored = localStorage.getItem(PW_KEY) || DEFAULT_PW;
+document.getElementById("pwChangeConfirm").addEventListener("click", async () => {
+  const target = document.getElementById("pwTarget")?.value || "admin";
   const oldVal = document.getElementById("pwOld").value;
   const newVal = document.getElementById("pwNew").value;
   const newVal2 = document.getElementById("pwNew2").value;
 
   const showMsg = (text) => { pwChangeMsg.textContent = text; pwChangeMsg.classList.remove("hidden"); };
 
-  if (oldVal !== stored) { showMsg("현재 비밀번호가 틀렸습니다."); return; }
+  if (oldVal !== authConfig.adminPw) { showMsg("현재 관리자 비밀번호가 틀렸습니다."); return; }
   if (!newVal || newVal.length < 4) { showMsg("새 비밀번호는 4자 이상이어야 합니다."); return; }
   if (newVal !== newVal2) { showMsg("새 비밀번호 확인이 일치하지 않습니다."); return; }
 
-  localStorage.setItem(PW_KEY, newVal);
+  const backup = { ...authConfig };
+  if (target === "admin") authConfig.adminPw = newVal;
+  else authConfig.guestPw = newVal;
+
+  try {
+    await saveAuthConfig();
+  } catch (e) {
+    authConfig = backup;
+    showMsg("저장에 실패했습니다. 인터넷 연결을 확인해주세요.");
+    return;
+  }
+
   pwChangeModal.classList.add("hidden");
-  alert("비밀번호가 변경되었습니다. 다음 로그인부터 새 비밀번호를 사용하세요.");
+  alert(`${target === "admin" ? "관리자" : "Guest"} 비밀번호가 변경되었습니다.\n모든 기기에서 다음 로그인부터 새 비밀번호를 사용하세요.`);
 });
 
 /* ---------- 지도 초기화 ---------- */
@@ -505,9 +622,7 @@ function renderProvincePanel() {
   });
 }
 
-/* 구/시 버튼을 누르면 그 지역으로 지도를 이동합니다.
-   서울은 이미 있는 자치구 경계 데이터로 정확히 맞춰 확대하고,
-   경기/인천은 카카오 지오코더로 대략 위치를 찾아 이동합니다. */
+/* 구/시 버튼을 누르면 그 지역으로 지도를 이동합니다. */
 function navigateToDistrict(province, name) {
   if (!map) return;
   if (province === "서울특별시" && window.SEOUL_DISTRICTS) {
@@ -672,8 +787,7 @@ function resolveLatLng(site) {
   return [37.5665, 126.9780];
 }
 
-/* 현장 목록/일정에서 현장을 클릭했을 때, 지도를 그 현장 위치로 부드럽게 이동하며 확대합니다.
-   구역 경계 좌표가 있으면 그 경계 전체가 화면에 들어오도록, 없으면 대표 좌표로 확대합니다. */
+/* 현장 목록/일정에서 현장을 클릭했을 때, 지도를 그 현장 위치로 부드럽게 이동하며 확대합니다. */
 function focusSite(site) {
   if (!map) return;
   if (site.boundary && site.boundary.length > 2) {
@@ -952,8 +1066,7 @@ async function fetchServerJournal(siteName) {
   }
 }
 
-/* 로컬(수동/붙여넣기)과 서버(텔레그램 실시간) 항목을 합쳐서 하나의 리스트로 만듦.
-   source === "telegram" 인 것만 "일지" 탭에, 나머지는 "추진경과" 탭에 나눠서 보여줌. */
+/* 로컬(수동/붙여넣기)과 서버(텔레그램 실시간) 항목을 합쳐서 하나의 리스트로 만듦. */
 function buildCombinedTimeline(site) {
   const local = (site.milestones || []).map(m => ({ date: m.date, text: m.text, source: m.source, local: true, ref: m }));
   const remote = (serverJournalCache[site.name] || []).map(r => ({
@@ -1548,7 +1661,6 @@ document.getElementById("excelFileInput").addEventListener("change", e => {
       site.name = name; site.city = city; site.district = district;
 
       // "구역 경계 좌표" 열: "위도,경도" 쌍을 세미콜론(;) 또는 줄바꿈으로 구분해 입력.
-      // 좌표추출도구의 "엑셀용 문자열 복사" 버튼이 만드는 형식과 동일합니다.
       const boundaryRaw = String(site.boundaryText || "").trim();
       site.boundary = boundaryRaw
         ? boundaryRaw.split(/[;\n]/).map(pair => {
@@ -1601,8 +1713,7 @@ function dateStamp() {
 }
 
 /* =========================================================
-   구역 좌표 추출 모달 — 현장 등록/수정 화면의 "구역 경계 좌표" 칸을
-   별도 도구 없이 이 지도 위에서 바로 클릭해서 채울 수 있게 합니다.
+   구역 좌표 추출 모달
    ========================================================= */
 let bpMap, bpPolygon, bpMarkers = [], bpPoints = [], bpGeocoder;
 let bpCadastralOn = false;
@@ -1788,3 +1899,6 @@ document.getElementById("boundaryPickerApply").addEventListener("click", () => {
   document.getElementById("f_boundary").value = text;
   closeBoundaryPicker();
 });
+
+/* ---------- 시작 시 비밀번호 설정 불러오기 ---------- */
+loadAuthConfig();
