@@ -2009,10 +2009,10 @@ function buildSiteCardHtml(site) {
     .filter(m => m.source !== "telegram")
     .slice().sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   const progressHtml = progress.length
-    ? progress.map(m => `<div class="pc-prog-item">
-        <span class="pc-prog-date">${pcVal(m.date)}</span>
-        <span class="pc-prog-text">${pcVal(m.text)}</span>
-      </div>`).join("")
+    ? `<table class="pc-progtbl">${progress.map(m => `<tr>
+        <td class="pc-prog-date">${pcVal(m.date)}</td>
+        <td class="pc-prog-text">${pcVal(m.text)}</td>
+      </tr>`).join("")}</table>`
     : `<div class="pc-empty">등록된 추진 경과가 없습니다.</div>`;
 
   const execs = site.executives || [];
