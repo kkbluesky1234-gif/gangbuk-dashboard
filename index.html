@@ -15,89 +15,70 @@
   box-sizing: border-box; background: #fff;
   display: flex; flex-direction: column;
   font-family: "맑은 고딕", "Malgun Gothic", sans-serif;
-  color: #111; font-size: 11px; line-height: 1.4;
+  color: #111; font-size: 12px; line-height: 1.4;
 }
 #printCard .pc-head {
   display: flex; justify-content: space-between; align-items: flex-end;
-  font-size: 14px; font-weight: 700; margin-bottom: 5px; flex: none;
+  font-size: 15px; font-weight: 700; margin-bottom: 6px; flex: none;
 }
-#printCard .pc-head .pc-manager { font-size: 12px; font-weight: 600; }
+#printCard .pc-head .pc-manager { font-size: 13px; font-weight: 600; }
 
 #printCard .pc-body {
-  display: grid; grid-template-columns: 40% 36% 24%;
-  border: 1px solid #7f7f7f; border-right: none;
+  display: grid; grid-template-columns: 38% 37% 25%;
+  border: 1px solid #9aa08c;
   flex: 1; min-height: 0;
 }
-#printCard .pc-col {
-  border-right: 1px solid #7f7f7f;
-  display: flex; flex-direction: column; min-height: 0;
+#printCard .pc-col { display: flex; flex-direction: column; min-height: 0; }
+#printCard .pc-col + .pc-col { border-left: 1px solid #9aa08c; }
+
+#printCard table.pc-main { width: 100%; height: 100%; border-collapse: collapse; table-layout: fixed; }
+#printCard table.pc-main th, #printCard table.pc-main td {
+  border: 1px solid #9aa08c; padding: 4px 6px; vertical-align: middle;
+  word-break: break-word; font-weight: 400; white-space: pre-wrap;
 }
-#printCard .pc-col-fill { flex: 1; }
-#printCard .pc-left-fill { flex: 1; border-top: 1px solid #7f7f7f; }
+#printCard table.pc-main th.pc-grp {
+  background: #e4ecd6; width: 26px; font-weight: 700; padding: 0;
+  writing-mode: vertical-rl; text-orientation: upright; letter-spacing: 4px;
+}
+#printCard table.pc-main th.pc-lbl { background: #eef4e2; font-weight: 700; text-align: center; }
+#printCard table.pc-main th.pc-lbl-y { background: #fbf7d5; font-weight: 700; text-align: center; }
+#printCard table.pc-main td.pc-c { text-align: center; }
+#printCard table.pc-main td.pc-l { text-align: left; }
+#printCard .pc-pj th, #printCard .pc-pj td { background: #e4ecd6; text-align: center; font-weight: 700; }
+#printCard .pc-sub { font-size: 10px; color: #555; display: block; }
 
 #printCard .pc-secthead {
-  background: #fdf6d8; border-bottom: 1px solid #7f7f7f;
-  text-align: center; font-weight: 700; padding: 4px 0; font-size: 12px; flex: none;
+  background: #fbf7d5; border-bottom: 1px solid #9aa08c;
+  text-align: center; font-weight: 700; padding: 6px 0; font-size: 13px; flex: none;
 }
-#printCard table.pc-tbl { width: 100%; border-collapse: collapse; table-layout: fixed; }
-#printCard table.pc-tbl.pc-tbl-grow { height: auto; }
-#printCard table.pc-tbl th, #printCard table.pc-tbl td {
-  border: 1px solid #7f7f7f; padding: 3px 5px; vertical-align: middle;
-  word-break: break-all; font-weight: 400; white-space: pre-wrap;
-  height: 26px; line-height: 1.35;
+#printCard .pc-prog {
+  padding: 8px 10px; flex: none; background: #eef4e2;
+  border-bottom: 1px solid #9aa08c;
 }
-#printCard table.pc-tbl th.pc-grp {
-  background: #eaf3dc; width: 24px; font-weight: 700;
-  writing-mode: vertical-rl; text-orientation: upright; letter-spacing: 3px;
-}
-#printCard table.pc-tbl th.pc-lbl { background: #eaf3dc; font-weight: 700; text-align: center; }
-#printCard table.pc-tbl td.pc-val { background: #fff; text-align: center; }
-#printCard table.pc-tbl td.pc-val-l { background: #fff; text-align: left; }
-#printCard .pc-sub { font-size: 9px; color: #444; display: block; }
-
-#printCard .pc-pjrow th.pc-lbl { background: #fdf6d8; }
-#printCard .pc-pjrow td { background: #fdf6d8; text-align: center; font-weight: 600; }
-
-#printCard .pc-prog { padding: 5px 7px; flex: 1; min-height: 0; overflow: hidden; }
-#printCard .pc-prog-item + .pc-prog-item { margin-top: 0; }
-#printCard .pc-prog-item { display: flex; gap: 7px; margin-bottom: 4px; }
-#printCard .pc-prog-date { color: #2e7d32; white-space: nowrap; font-weight: 600; width: 86px; flex: none; }
+#printCard .pc-prog-item { display: flex; gap: 10px; margin-bottom: 7px; }
+#printCard .pc-prog-item:last-child { margin-bottom: 0; }
+#printCard .pc-prog-date { white-space: nowrap; width: 82px; flex: none; text-align: center; }
 #printCard .pc-prog-text { flex: 1; }
-#printCard .pc-empty { color: #888; padding: 5px 7px; }
+#printCard .pc-empty { color: #888; }
 
-#printCard .pc-map-wrap {
-  border-top: 1px solid #7f7f7f; padding: 5px; flex: none; background: #fff;
-}
-#printCard .pc-mapbox {
-  border: 1px solid #7f7f7f; height: 86mm;
-}
-#printCard .pc-mapbox.pc-mapbox-empty {
-  display: flex; align-items: center; justify-content: center; color: #888;
-}
-#printCard .pc-note-block { padding: 6px 8px; flex: 1; display: flex; flex-direction: column; }
-#printCard .pc-note-title { font-weight: 700; margin-bottom: 3px; }
-#printCard .pc-note-body { white-space: pre-wrap; margin-bottom: 12px; }
-#printCard .pc-note-fill { flex: 1; }
+#printCard .pc-map-wrap { flex: 1; min-height: 0; display: flex; padding: 4px; }
+#printCard .pc-mapbox { flex: 1; border: 1px solid #9aa08c; min-height: 0; }
+#printCard .pc-mapbox-empty { display: flex; align-items: center; justify-content: center; color: #888; }
+
+#printCard .pc-note-block { padding: 8px 10px; flex: 1; min-height: 0; }
+#printCard .pc-note-title { font-weight: 700; margin-bottom: 4px; }
+#printCard .pc-note-body { white-space: pre-wrap; margin-bottom: 14px; }
 
 @media print {
   html, body { height: auto !important; margin: 0 !important; padding: 0 !important; }
   body > *:not(#printCard) { display: none !important; }
   #printCard { display: block !important; }
   #printCard .pc-sheet {
-    width: 100% !important;
-    height: 190mm !important;
-    min-height: 190mm !important;
-    padding: 0 !important;
-    display: flex !important;
-    flex-direction: column !important;
+    width: 100% !important; height: 190mm !important; min-height: 190mm !important;
+    padding: 0 !important; display: flex !important; flex-direction: column !important;
     page-break-after: avoid;
   }
-  #printCard .pc-body {
-    flex: 1 1 auto !important;
-    min-height: 0 !important;
-    align-items: stretch !important;
-  }
-  #printCard .pc-col { height: 100% !important; }
+  #printCard .pc-body { flex: 1 1 auto !important; min-height: 0 !important; }
   @page { size: A4 landscape; margin: 7mm; }
   * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
 }
