@@ -1998,19 +1998,16 @@ function buildSiteCardHtml(site) {
   const loc = [site.city, site.district, site.dong].filter(Boolean).join(" ");
   const address = site.address || loc || "";
 
-  // 세대 내역: 총 N세대 (임대 a / 장기전세 b / 계 c)
   const subUnits = [];
-  if (site.rentalUnits) subUnits.push(`임대 ${pcNum(site.rentalUnits)}`);
-  if (site.ltRentUnits) subUnits.push(`장기전세 ${pcNum(site.ltRentUnits)}`);
+  if (site.rentalUnits) subUnits.push(`임대 ${pcNum(site.rentalUnits)}세대`);
+  if (site.ltRentUnits) subUnits.push(`장기전세 ${pcNum(site.ltRentUnits)}세대`);
   if (site.rentalTotal) subUnits.push(`계 ${pcNum(site.rentalTotal)}세대`);
   const unitsHtml = `${site.newUnits ? pcNum(site.newUnits) + "세대" : ""}` +
-    (subUnits.length ? `<span class="pc-sub">(${esc(subUnits.join(" / "))})</span>` : "");
+    (subUnits.length ? `<span class="pc-sub">[${esc(subUnits.join(" / "))}]</span>` : "");
 
-  // 사업진행현황: 추진경과(로컬 milestones) 날짜 오름차순
   const progress = (site.milestones || [])
     .filter(m => m.source !== "telegram")
-    .slice()
-    .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    .slice().sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   const progressHtml = progress.length
     ? progress.map(m => `<div class="pc-prog-item">
         <span class="pc-prog-date">${pcVal(m.date)}</span>
@@ -2018,20 +2015,20 @@ function buildSiteCardHtml(site) {
       </div>`).join("")
     : `<div class="pc-empty">등록된 추진 경과가 없습니다.</div>`;
 
-  // 조합 - 집행부 여러 명
   const execs = site.executives || [];
   const execRowsHtml = execs.length
     ? execs.map(e => `<tr>
         <th class="pc-lbl">집행부</th>
-        <td class="pc-val-l">${pcVal([e.name, e.company].filter(Boolean).join(" / "))}${e.phone ? `<span class="pc-sub">${pcVal(e.phone)}</span>` : ""}</td>
-        <td class="pc-val-l">${pcVal(e.note)}</td>
+        <td class="pc-l" colspan="3">${pcVal([e.name, e.company].filter(Boolean).join(" : "))}${e.phone ? `<span class="pc-sub">${pcVal(e.phone)}</span>` : ""}${e.note ? `<span class="pc-sub">${pcVal(e.note)}</span>` : ""}</td>
       </tr>`).join("")
-    : `<tr><th class="pc-lbl">집행부</th><td class="pc-val-l"></td><td class="pc-val-l"></td></tr>`;
+    : `<tr><th class="pc-lbl">집행부</th><td class="pc-l" colspan="3"></td></tr>`;
+
+  const unionRowCount = 5 + Math.max(1, execs.length);
 
   const hasBoundary = site.boundary && site.boundary.length > 2;
   const mapHtml = hasBoundary || (site.lat && site.lng)
     ? `<div class="pc-map-wrap"><div class="pc-mapbox" id="printCardMap"></div></div>`
-    : `<div class="pc-map-wrap"><div class="pc-mapbox pc-mapbox-empty">구역 경계 좌표가 없어 지도를 표시할 수 없습니다.</div></div>`;
+    : `<div class="pc-map-wrap"><div class="pc-mapbox pc-mapbox-empty">구역 경계 좌표가 없습니다.</div></div>`;
 
   return `
 <div class="pc-sheet">
@@ -2041,118 +2038,105 @@ function buildSiteCardHtml(site) {
   </div>
 
   <div class="pc-body">
-    <!-- 좌측: 사업개요 / 현황 / 조합 -->
-    <div class="pc-col pc-col-left">
-      <table class="pc-tbl">
-        <tr class="pc-pjrow">
-          <th class="pc-lbl" style="width:24px;border-right:none"></th>
-          <th class="pc-lbl" style="width:64px">PJ 명</th>
-          <td>${pcVal(site.name)}</td>
-          <td style="width:96px">${pcVal(site.bizType || site.status)}</td>
-        </tr>
-      </table>
+    <div class="pc-col">
+      <table class="pc-main">
+        <colgroup>
+          <col style="width:26px"><col style="width:78px"><col>
+          <col style="width:70px"><col style="width:110px">
+        </colgroup>
 
-      <table class="pc-tbl">
+        <tr class="pc-pj">
+          <th colspan="2">PJ 명</th>
+          <td>${pcVal(site.name)}</td>
+          <td colspan="2">${pcVal(site.bizType || site.status)}</td>
+        </tr>
+
         <tr>
-          <th class="pc-grp" rowspan="7">사업개요</th>
-          <th class="pc-lbl" style="width:64px">위 치</th>
-          <td class="pc-val" colspan="3">${pcVal(address)}</td>
+          <th class="pc-grp" rowspan="6">사업개요</th>
+          <th class="pc-lbl">위 치</th>
+          <td class="pc-c" colspan="3">${pcVal(address)}</td>
         </tr>
         <tr>
           <th class="pc-lbl">지역지구</th>
-          <td class="pc-val" colspan="3">${pcVal(site.zoneUse)}</td>
+          <td class="pc-c" colspan="3">${pcVal(site.zoneUse)}</td>
         </tr>
         <tr>
           <th class="pc-lbl">구역면적<span class="pc-sub">(m²)</span></th>
-          <td class="pc-val">${pcNum(site.area)}${site.area ? " m²" : ""}${pyeong(site.area)}</td>
-          <th class="pc-lbl" style="width:60px">조합원수</th>
-          <td class="pc-val">${pcVal(site.unionMembers)}</td>
+          <td class="pc-c">${pcNum(site.area)}${pyeong(site.area)}</td>
+          <th class="pc-lbl">조합원수</th>
+          <td class="pc-c">${pcVal(site.unionMembers)}</td>
         </tr>
         <tr>
-          <th class="pc-lbl">연면적<span class="pc-sub">(m²)</span></th>
-          <td class="pc-val">${pcNum(site.totalFloorArea)}${site.totalFloorArea ? " m²" : ""}${pyeong(site.totalFloorArea)}</td>
+          <th class="pc-lbl">연 면 적<span class="pc-sub">(m²)</span></th>
+          <td class="pc-c">${pcNum(site.totalFloorArea)}${pyeong(site.totalFloorArea)}</td>
           <th class="pc-lbl">용 적 률</th>
-          <td class="pc-val">${pcVal(site.far)}</td>
+          <td class="pc-c">${pcVal(site.far)}</td>
         </tr>
         <tr>
           <th class="pc-lbl">신축세대</th>
-          <td class="pc-val">${unitsHtml}</td>
+          <td class="pc-c">${unitsHtml}</td>
           <th class="pc-lbl">건 폐 율</th>
-          <td class="pc-val">${pcVal(site.bcr)}</td>
+          <td class="pc-c">${pcVal(site.bcr)}</td>
         </tr>
         <tr>
           <th class="pc-lbl">주차대수</th>
-          <td class="pc-val">${pcVal(site.parking)}</td>
+          <td class="pc-c">${pcVal(site.parking)}</td>
           <th class="pc-lbl">기 타</th>
-          <td class="pc-val">${pcVal(site.scale)}</td>
+          <td class="pc-c">${pcVal(site.scale)}</td>
         </tr>
-        <tr>
-          <th class="pc-lbl">사업단계</th>
-          <td class="pc-val" colspan="3">${pcVal(site.stage)}${site.pipelineStage ? " / " + pcVal(site.pipelineStage) : ""}</td>
-        </tr>
-      </table>
 
-      <table class="pc-tbl">
         <tr>
           <th class="pc-grp" rowspan="2">현황</th>
-          <th class="pc-lbl" style="width:64px">현건축물<br>현황</th>
-          <td class="pc-val-l" style="height:34px">${pcVal(site.currentBuilding)}</td>
+          <th class="pc-lbl">현건축물<br>현황</th>
+          <td class="pc-c" colspan="3">${pcVal(site.currentBuilding)}</td>
         </tr>
         <tr>
           <th class="pc-lbl">입지특성</th>
-          <td class="pc-val-l" style="height:34px">${pcVal(site.siteFeature)}</td>
+          <td class="pc-l" colspan="3">${pcVal(site.siteFeature)}</td>
         </tr>
-      </table>
 
-      <table class="pc-tbl pc-tbl-grow">
         <tr>
-          <th class="pc-grp" rowspan="${6 + Math.max(0, execs.length - 1)}">조합</th>
-          <th class="pc-lbl" style="width:64px">구 분</th>
-          <th class="pc-lbl">성명 / 업체명 / 연락처</th>
-          <th class="pc-lbl" style="width:90px">특이사항</th>
+          <th class="pc-grp" rowspan="${unionRowCount}">조합</th>
+          <th class="pc-lbl-y">구 분</th>
+          <th class="pc-lbl-y" colspan="2">성명 / 업체명 / 연락처</th>
+          <th class="pc-lbl-y">특이사항</th>
         </tr>
         <tr>
           <th class="pc-lbl">사무실</th>
-          <td class="pc-val-l">${pcVal(site.unionOffice)}</td>
-          <td class="pc-val-l"></td>
+          <td class="pc-l" colspan="3">${pcVal(site.unionOffice)}</td>
         </tr>
         ${execRowsHtml}
         <tr>
           <th class="pc-lbl">정비업체</th>
-          <td class="pc-val-l">${pcVal(site.maintCo)}</td>
-          <td class="pc-val-l">${site.meetingCo ? "총회대행: " + pcVal(site.meetingCo) : ""}</td>
+          <td class="pc-l">${pcVal(site.maintCo)}</td>
+          <th class="pc-lbl-y">총회대행</th>
+          <td class="pc-l">${pcVal(site.meetingCo)}</td>
         </tr>
         <tr>
           <th class="pc-lbl">설계업체</th>
-          <td class="pc-val-l">${pcVal(site.designCo)}${site.trustCo ? `<span class="pc-sub">신탁사: ${pcVal(site.trustCo)}</span>` : ""}</td>
-          <td class="pc-val-l"></td>
+          <td class="pc-l" colspan="3">${pcVal(site.designCo)}${site.trustCo ? `<span class="pc-sub">신탁사 : ${pcVal(site.trustCo)}</span>` : ""}</td>
         </tr>
         <tr>
           <th class="pc-lbl">그외업체</th>
-          <td class="pc-val-l" colspan="2">${pcVal(site.otherCo)}</td>
+          <td class="pc-l" colspan="3">${pcVal(site.otherCo)}</td>
         </tr>
       </table>
-      <div class="pc-left-fill"></div>
     </div>
 
-    <!-- 중앙: 사업진행현황 + 지도 -->
     <div class="pc-col">
       <div class="pc-secthead">사업진행현황</div>
       <div class="pc-prog">${progressHtml}</div>
-      <div class="pc-col-fill"></div>
       ${mapHtml}
     </div>
 
-    <!-- 우측: 그외 -->
     <div class="pc-col">
       <div class="pc-secthead">그외</div>
       <div class="pc-note-block">
-        <div class="pc-note-title">■ 특이사항</div>
+        <div class="pc-note-title">▣ 특이사항</div>
         <div class="pc-note-body">${pcVal(site.specialNote)}</div>
-        <div class="pc-note-title">■ 타사활동</div>
+        <div class="pc-note-title">▣ 타사활동</div>
         <div class="pc-note-body">${pcVal(site.competitor)}</div>
-        ${site.note ? `<div class="pc-note-title">■ 비고</div><div class="pc-note-body">${pcVal(site.note)}</div>` : ""}
-        <div class="pc-note-fill"></div>
+        ${site.note ? `<div class="pc-note-title">▣ 비고</div><div class="pc-note-body">${pcVal(site.note)}</div>` : ""}
       </div>
     </div>
   </div>
