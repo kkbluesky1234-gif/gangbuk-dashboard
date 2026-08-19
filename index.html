@@ -53,16 +53,19 @@
   text-align: center; font-weight: 700; padding: 6px 0; font-size: 13px; flex: none;
 }
 #printCard .pc-prog {
-  padding: 8px 10px; flex: none; background: #eef4e2;
-  border-bottom: 1px solid #9aa08c;
+  flex: 1; min-height: 0; background: #eef4e2;
+  border-bottom: 1px solid #9aa08c; overflow: hidden;
 }
-#printCard .pc-prog-item { display: flex; gap: 10px; margin-bottom: 7px; }
-#printCard .pc-prog-item:last-child { margin-bottom: 0; }
-#printCard .pc-prog-date { white-space: nowrap; width: 82px; flex: none; text-align: center; }
-#printCard .pc-prog-text { flex: 1; }
-#printCard .pc-empty { color: #888; }
+#printCard table.pc-progtbl { width: 100%; border-collapse: collapse; }
+#printCard table.pc-progtbl td { padding: 5px 8px; vertical-align: top; }
+#printCard table.pc-progtbl td.pc-prog-date {
+  width: 96px; white-space: nowrap; text-align: center;
+  border-right: 1px solid #9aa08c;
+}
+#printCard table.pc-progtbl td.pc-prog-text { padding-left: 12px; }
+#printCard .pc-empty { color: #888; padding: 8px 10px; }
 
-#printCard .pc-map-wrap { flex: 1; min-height: 0; display: flex; padding: 4px; }
+#printCard .pc-map-wrap { flex: none; height: 92mm; display: flex; padding: 4px; }
 #printCard .pc-mapbox { flex: 1; border: 1px solid #9aa08c; min-height: 0; }
 #printCard .pc-mapbox-empty { display: flex; align-items: center; justify-content: center; color: #888; }
 
