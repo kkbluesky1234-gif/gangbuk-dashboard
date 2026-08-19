@@ -2114,7 +2114,7 @@ function buildSiteCardHtml(site) {
         </tr>
         <tr>
           <th class="pc-lbl">설계업체</th>
-          <td class="pc-l" colspan="3">${pcVal(site.designCo)}${site.trustCo ? `<span class="pc-sub">신탁사 : ${pcVal(site.trustCo)}</span>` : ""}</td>
+          <td class="pc-l" colspan="3">${pcVal(site.designCo)}</td>
         </tr>
         <tr>
           <th class="pc-lbl">그외업체</th>
