@@ -396,9 +396,9 @@ body:not(.is-admin) .admin-only{display:none;}
 
 /* ===== Site detail panel ===== */
 #siteDetailPanel{
-  width:280px;
-  min-width:280px;
-  padding:14px;
+  width:420px;
+  min-width:420px;
+  padding:16px 20px;
   overflow-y:auto;
   background:#fff;
   border-right:1px solid var(--slate-300);
