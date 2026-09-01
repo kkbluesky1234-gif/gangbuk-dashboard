@@ -1765,6 +1765,9 @@ officeInput.value = localStorage.getItem(OFFICE_KEY) || officeInput.value;
 officeInput.addEventListener("change", () => localStorage.setItem(OFFICE_KEY, officeInput.value));
 
 /* ---------- 유틸 ---------- */
+function esc(str) {
+  return String(str ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
 function fmtNum(n) {
   const num = Number(n);
   if (isNaN(num)) return esc(n);
