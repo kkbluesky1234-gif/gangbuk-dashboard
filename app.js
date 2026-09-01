@@ -975,7 +975,6 @@ function renderSiteList() {
         <input type="checkbox" class="site-card-check admin-only" ${selectedIds.has(s.id) ? "checked" : ""}>
         <div class="site-card-name">${esc(s.name)}</div>
       </div>
-      <div class="site-card-sub">담당: ${esc(s.manager || "-")}</div>
       <div class="site-card-tags">
         ${s.pipelineStage ? `<span class="tag pipe-${esc(s.pipelineStage)}">${esc(s.pipelineStage)}</span>` : ""}
         ${s.stage ? `<span class="tag stage">${esc(s.stage)}</span>` : ""}
