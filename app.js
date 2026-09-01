@@ -1046,18 +1046,14 @@ function openSiteDetail(id) {
   const site = sites.find(s => s.id === id);
   if (!site) return;
   currentDetailId = id;
-  document.getElementById("siteList").classList.add("hidden");
-  document.getElementById("bulkBar").classList.add("hidden");
   document.getElementById("siteDetailPanel").classList.remove("hidden");
   renderSiteDetail();
 }
 function closeSiteDetail() {
   currentDetailId = null;
   document.getElementById("siteDetailPanel").classList.add("hidden");
-  document.getElementById("siteList").classList.remove("hidden");
   updateBulkBar();
 }
-
 const serverJournalCache = {}; // siteName -> [{date,text,id}] 캐시 (매번 재요청 방지)
 
 async function fetchServerJournal(siteName) {
