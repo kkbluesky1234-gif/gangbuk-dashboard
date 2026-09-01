@@ -1346,8 +1346,8 @@ function renderSiteDetail() {
           <button id="detailEditBtn" class="btn btn-ghost btn-sm admin-only">수정</button>
         </div>
         <div class="detail-fields">
-          <div class="detail-field"><span class="k">구역면적</span><span class="v">${site.area ? esc(site.area) + " m²" : "-"}</span></div>
-          <div class="detail-field"><span class="k">연면적</span><span class="v">${site.totalFloorArea ? esc(site.totalFloorArea) + " m²" : "-"}</span></div>
+          <div class="detail-field"><span class="k">구역면적</span><span class="v">${site.area ? fmtNum(site.area) + " m²" : "-"}</span></div>
+          <div class="detail-field"><span class="k">연면적</span><span class="v">${site.totalFloorArea ? fmtNum(site.totalFloorArea) + " m²" : "-"}</span></div>
           <div class="detail-field"><span class="k">규모</span><span class="v">${esc(site.scale || "-")}</span></div>
           <div class="detail-field"><span class="k">조합원수</span><span class="v">${esc(site.unionMembers || "-")}</span></div>
           <div class="detail-field"><span class="k">신축세대</span><span class="v">${esc(site.newUnits || "-")}</span></div>
@@ -1765,8 +1765,10 @@ officeInput.value = localStorage.getItem(OFFICE_KEY) || officeInput.value;
 officeInput.addEventListener("change", () => localStorage.setItem(OFFICE_KEY, officeInput.value));
 
 /* ---------- 유틸 ---------- */
-function esc(str) {
-  return String(str ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function fmtNum(n) {
+  const num = Number(n);
+  if (isNaN(num)) return esc(n);
+  return num.toLocaleString("ko-KR");
 }
 function downloadFile(filename, content, mime) {
   const blob = new Blob([content], { type: mime });
