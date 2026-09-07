@@ -8,19 +8,11 @@
 const STORAGE_KEY = "dashboard_sites_v1";
 const OFFICE_KEY = "dashboard_office_name_v1";
 
-/* 비밀번호 관련 --------------------------------------------
-   아래 두 값은 "최초 1회"만 쓰이는 기본 비밀번호입니다.
-   Firestore에 비밀번호가 저장되고 나면 이 값은 더 이상 사용되지 않습니다.
-   첫 로그인 후 반드시 관리자 화면의 "비밀번호 변경"으로 바꾸세요. */
 const DEFAULT_ADMIN_PW = "admin1234";
 const DEFAULT_GUEST_PW = "guest1234";
 const AUTH_CACHE_KEY = "dashboard_auth_cache_v1";
 const AUTH_DOC_ID = "auth_v1";
 
-/* 텔레그램 일지 서버 연동 (선택 사항)
-   Render 등에 배포한 서버 주소를 넣으면, 현장 상세 패널을 열 때
-   그 현장 이름(#태그)으로 올라온 텔레그램 일지를 자동으로 같이 보여줍니다.
-   비워두면 로컬(붙여넣기로 추가한) 일지만 표시됩니다. */
 const SERVER_BASE_URL = "https://telegram-journal-server.onrender.com";
 
 const FIELD_ORDER = [
@@ -71,7 +63,6 @@ function provinceOf(city) {
   return "";
 }
 
-/* ---------- 저장/로드 ---------- */
 function boundaryToFirestore(boundary) {
   return (boundary || []).map(([la, ln]) => ({ lat: la, lng: ln }));
 }
@@ -85,7 +76,7 @@ async function loadSites() {
     if (snap.exists) {
       const raw = Array.isArray(snap.data().sites) ? snap.data().sites : [];
       sites = raw.map(s => ({ ...s, boundary: boundaryFromFirestore(s.boundary) }));
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(sites)); // 오프라인 대비 캐시
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(sites));
       return;
     }
   } catch (e) {
@@ -112,17 +103,13 @@ function uid() {
   return "s_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
 
-/* =========================================================
-   비밀번호 설정 (Firestore 공유)
-   dashboard/auth_v1 문서에 { adminPw, guestPw } 형태로 저장됩니다.
-   ========================================================= */
 let authConfig = { adminPw: DEFAULT_ADMIN_PW, guestPw: DEFAULT_GUEST_PW };
 let authLoaded = false;
 
 try {
   const cached = JSON.parse(localStorage.getItem(AUTH_CACHE_KEY));
   if (cached && cached.adminPw) authConfig = { ...authConfig, ...cached };
-} catch (e) { /* 캐시 없음 */ }
+} catch (e) { }
 
 function authDocRef() {
   try {
@@ -149,7 +136,6 @@ async function loadAuthConfig() {
       };
       localStorage.setItem(AUTH_CACHE_KEY, JSON.stringify(authConfig));
     } else {
-      // 최초 실행: 기본 비밀번호로 문서를 만들어 둡니다.
       await ref.set(authConfig);
       localStorage.setItem(AUTH_CACHE_KEY, JSON.stringify(authConfig));
       console.log("비밀번호 설정을 새로 만들었습니다. 관리자 화면에서 꼭 변경하세요.");
@@ -167,13 +153,12 @@ async function saveAuthConfig() {
   localStorage.setItem(AUTH_CACHE_KEY, JSON.stringify(authConfig));
 }
 
-/* ---------- 로그인 ---------- */
 const loginGate = document.getElementById("loginGate");
 const pwBox = document.getElementById("pwBox");
 const pwInput = document.getElementById("pwInput");
 const pwError = document.getElementById("pwError");
 
-let pendingRole = null; // "admin" 또는 "guest"
+let pendingRole = null;
 
 function openPwBox(role) {
   pendingRole = role;
@@ -234,7 +219,6 @@ document.getElementById("btnRefreshData").addEventListener("click", async () => 
   btn.disabled = false; btn.textContent = "🔄 새로고침";
 });
 
-// 콘솔에서 비밀번호를 바꾸고 싶을 때: changeAdminPassword("새비밀번호") / changeGuestPassword("새비밀번호")
 window.changeAdminPassword = async function (newPw) {
   authConfig.adminPw = newPw;
   await saveAuthConfig();
@@ -246,7 +230,6 @@ window.changeGuestPassword = async function (newPw) {
   console.log("Guest 비밀번호가 변경되었습니다.");
 };
 
-/* ---------- 텔레그램 일지 붙여넣기 ---------- */
 const telegramImportModal = document.getElementById("telegramImportModal");
 let tgParsedEntries = [];
 
@@ -331,7 +314,6 @@ document.getElementById("tgImportConfirm").addEventListener("click", () => {
   alert(`${tgParsedEntries.length}건을 "${site.name}" 일지에 추가했습니다.`);
 });
 
-/* ---------- 구역 색상 설정 ---------- */
 const regionColorModal = document.getElementById("regionColorModal");
 
 document.getElementById("btnRegionColors").addEventListener("click", () => {
@@ -366,7 +348,6 @@ document.getElementById("regionColorReset").addEventListener("click", () => {
   renderRegionButtons();
 });
 
-/* ---------- 사업소 이름 정리 (통합) ---------- */
 const officeCleanModal = document.getElementById("officeCleanModal");
 
 document.getElementById("btnCleanOffice").addEventListener("click", () => {
@@ -410,10 +391,6 @@ document.getElementById("officeCleanApply").addEventListener("click", () => {
   officeCleanModal.classList.add("hidden");
 });
 
-/* ---------- 비밀번호 변경 (관리자 모드 내) ----------
-   관리자 비밀번호 / Guest 비밀번호를 골라서 바꿀 수 있습니다.
-   변경 시 반드시 "현재 관리자 비밀번호"를 입력해야 합니다.
-   저장하면 Firestore에 반영되어 모든 기기에 즉시 적용됩니다. */
 const pwChangeModal = document.getElementById("pwChangeModal");
 const pwChangeMsg = document.getElementById("pwChangeMsg");
 
@@ -478,7 +455,6 @@ document.getElementById("pwChangeConfirm").addEventListener("click", async () =>
   alert(`${target === "admin" ? "관리자" : "Guest"} 비밀번호가 변경되었습니다.\n모든 기기에서 다음 로그인부터 새 비밀번호를 사용하세요.`);
 });
 
-/* ---------- 지도 초기화 ---------- */
 async function initMap() {
   document.getElementById("map").innerHTML = '<div style="padding:40px;font-size:14px;color:#64748b">불러오는 중...</div>';
   await loadSites();
@@ -503,7 +479,6 @@ async function initMap() {
   });
 }
 
-/* 데이터가 바뀔 때마다 이 함수 하나만 호출하면 화면 전체가 갱신됩니다. */
 function refreshAll() {
   populateFilters();
   renderRegionButtons();
@@ -519,7 +494,6 @@ function refreshAll() {
   }
 }
 
-/* ---------- 필터 옵션 채우기 ---------- */
 function populateFilters() {
   const managerSel = document.getElementById("managerFilter");
   const districtSel = document.getElementById("districtSelect");
@@ -572,7 +546,6 @@ function visibleSites() {
   );
 }
 
-/* ---------- 시도 선택 (지도 우측 상단) ---------- */
 function renderProvincePanel() {
   const titleEl = document.getElementById("provinceTitle");
   const box = document.getElementById("provinceButtons");
@@ -594,7 +567,6 @@ function renderProvincePanel() {
     return;
   }
 
-  // 드릴다운: 선택한 시/도의 구·시 목록을 보여줌
   titleEl.innerHTML = `<button id="provinceBack" class="province-back">← 시도 선택</button> &gt; ${esc(provinceDrilldown)}`;
 
   let list = [];
@@ -628,7 +600,6 @@ function renderProvincePanel() {
   });
 }
 
-/* 구/시 버튼을 누르면 그 지역으로 지도를 이동합니다. */
 function navigateToDistrict(province, name) {
   if (!map) return;
   if (province === "서울특별시" && window.SEOUL_DISTRICTS) {
@@ -649,7 +620,6 @@ function navigateToDistrict(province, name) {
   });
 }
 
-/* 지역(사업소) 버튼을 눌렀을 때, 그 지역에 해당하는 현장들이 모두 화면에 들어오도록 지도를 맞춥니다. */
 function fitMapToVisibleSites() {
   if (!map) return;
   const vis = visibleSites();
@@ -665,7 +635,6 @@ function fitMapToVisibleSites() {
   map.setBounds(bounds);
 }
 
-/* ---------- 지역(사업소) 빠른 필터 버튼 ---------- */
 function renderRegionButtons() {
   const box = document.getElementById("regionButtons");
   const regions = ["전체", ...allRegions()];
@@ -684,7 +653,6 @@ function renderRegionButtons() {
   });
 }
 
-/* ---------- 파이프라인 단계 탭 ---------- */
 function renderTabsBar() {
   const box = document.getElementById("tabsBar");
   const scoped = regionScopedSites();
@@ -705,7 +673,6 @@ function renderTabsBar() {
   });
 }
 
-/* ---------- 통계바 ---------- */
 function renderStatsBar() {
   const scoped = regionScopedSites();
   const now = new Date();
@@ -729,7 +696,6 @@ function renderStatsBar() {
   ).join("");
 }
 
-/* ---------- 다가오는 일정(3개월) ---------- */
 function renderUpcoming() {
   const now = new Date();
   const in3mo = new Date(now); in3mo.setMonth(in3mo.getMonth() + 3);
@@ -769,8 +735,7 @@ document.addEventListener("click", e => {
   if (!widget.contains(e.target)) document.getElementById("upcomingPanel").classList.add("hidden");
 });
 
-/* ---------- 대략적인 구 중심좌표 (위경도 미입력 시 사용) ---------- */
-const DISTRICT_FALLBACK = { // 필요한 구를 계속 추가하며 쓰면 됩니다.
+const DISTRICT_FALLBACK = {
   "강서구": [37.5509, 126.8495], "양천구": [37.5170, 126.8666],
   "마포구": [37.5663, 126.9019], "은평구": [37.6027, 126.9291],
   "서대문구": [37.5791, 126.9368], "종로구": [37.5730, 126.9794],
@@ -793,7 +758,6 @@ function resolveLatLng(site) {
   return [37.5665, 126.9780];
 }
 
-/* 현장 목록/일정에서 현장을 클릭했을 때, 지도를 그 현장 위치로 부드럽게 이동하며 확대합니다. */
 function focusSite(site) {
   if (!map) return;
   if (site.boundary && site.boundary.length > 2) {
@@ -807,8 +771,6 @@ function focusSite(site) {
   }
 }
 
-/* ---------- 마커 렌더링 ---------- */
-/* ---------- 서울시 자치구 경계 + 권역 색상 + 현장 수 라벨 ---------- */
 let districtLayer = [];
 const REGION_PALETTE = ["#8b5cf6", "#f59e0b", "#3b82f6", "#10b981", "#ec4899", "#64748b"];
 const REGION_COLOR_KEY = "dashboard_region_colors_v1";
@@ -905,7 +867,6 @@ function renderMarkers() {
       position: labelPos, content: label, yAnchor: 1, xAnchor: 0.5, zIndex: 3
     });
     labelOverlay.setMap(map);
-    // simple pixel offset via CSS transform since Kakao CustomOverlay has no native px offset param pre-set
     label.style.transform = `translate(${offset.x}px, ${offset.y}px)`;
 
     if (labelEditMode && isAdmin) {
@@ -957,7 +918,6 @@ document.getElementById("btnLabelEdit").addEventListener("click", () => {
   renderMarkers();
 });
 
-/* ---------- 사이드 목록 ---------- */
 let selectedIds = new Set();
 
 function renderSiteList() {
@@ -965,7 +925,6 @@ function renderSiteList() {
   const vis = visibleSites();
   document.getElementById("siteCount").textContent = `${vis.length}개 현장`;
 
-  // 필터가 바뀌어 화면에서 사라진 항목은 선택 해제
   const visIds = new Set(vis.map(s => s.id));
   selectedIds.forEach(id => { if (!visIds.has(id)) selectedIds.delete(id); });
 
@@ -1013,7 +972,6 @@ function renderSiteList() {
   updateBulkBar();
 }
 
-/* ---------- 현장 일괄 삭제 ---------- */
 function updateBulkBar() {
   const bar = document.getElementById("bulkBar");
   const count = selectedIds.size;
@@ -1038,7 +996,6 @@ document.getElementById("btnBulkDelete").addEventListener("click", () => {
   refreshAll();
 });
 
-/* ---------- 현장 상세 패널 (클릭 시 목록 자리에 표시) ---------- */
 let currentDetailId = null;
 
 function openSiteDetail(id) {
@@ -1051,23 +1008,23 @@ function openSiteDetail(id) {
 function closeSiteDetail() {
   currentDetailId = null;
   document.getElementById("siteDetailPanel").classList.add("hidden");
+  document.body.classList.remove("contact-fullscreen");
   updateBulkBar();
 }
-const serverJournalCache = {}; // siteName -> [{date,text,id}] 캐시 (매번 재요청 방지)
+const serverJournalCache = {};
 
 async function fetchServerJournal(siteName) {
   if (!SERVER_BASE_URL) return [];
   try {
     const res = await fetch(`${SERVER_BASE_URL}/api/journal?site=${encodeURIComponent(siteName)}`);
     if (!res.ok) return [];
-    return await res.json(); // [{id, site, date, text, source, author, ...}]
+    return await res.json();
   } catch (e) {
     console.warn("서버 일지 불러오기 실패:", e);
     return [];
   }
 }
 
-/* 로컬(수동/붙여넣기)과 서버(텔레그램 실시간) 항목을 합쳐서 하나의 리스트로 만듦. */
 function buildCombinedTimeline(site) {
   const local = (site.milestones || []).map(m => ({ date: m.date, text: m.text, source: m.source, local: true, ref: m }));
   const remote = (serverJournalCache[site.name] || []).map(r => ({
@@ -1081,8 +1038,8 @@ function renderTimelineList(listEl, entries, site, { emptyText }) {
   listEl.innerHTML = entries.map((m, i) => `
     <div class="timeline-item" data-idx="${i}">
       <span class="t-date">${esc(m.date || "")}</span>
-      <span>${m.source === "telegram" ? '<span class="tg-badge">\ud83d\udce9</span> ' : ""}${esc(m.text || "")}</span>
-      ${isAdmin ? `<button class="t-del">\u2715</button>` : ""}
+      <span>${m.source === "telegram" ? '<span class="tg-badge">📩</span> ' : ""}${esc(m.text || "")}</span>
+      ${isAdmin ? `<button class="t-del">✕</button>` : ""}
     </div>`).join("") || `<p class="hint">${emptyText}</p>`;
 
   listEl.querySelectorAll(".t-del").forEach((btn, i) => {
@@ -1093,7 +1050,7 @@ function renderTimelineList(listEl, entries, site, { emptyText }) {
         persist();
       } else if (SERVER_BASE_URL && entry.remoteId) {
         try { await fetch(`${SERVER_BASE_URL}/api/journal/${entry.remoteId}`, { method: "DELETE" }); }
-        catch (e) { alert("\uc11c\ubc84 \uc77c\uc9c0 \uc0ad\uc81c\uc5d0 \uc2e4\ud328\ud588\uc2b5\ub2c8\ub2e4."); return; }
+        catch (e) { alert("서버 일지 삭제에 실패했습니다."); return; }
         serverJournalCache[site.name] = (serverJournalCache[site.name] || []).filter(r => r.id !== entry.remoteId);
       }
       renderJournalPanel(site);
@@ -1107,31 +1064,30 @@ function renderProgressPanel(site) {
   const listEl = panel.querySelector('[data-panel="progress"] .timeline-list');
   if (!listEl) return;
   const entries = buildCombinedTimeline(site).filter(e => e.source !== "telegram");
-  renderTimelineList(listEl, entries, site, { emptyText: "\ub4f1\ub85d\ub41c \ucd94\uc9c4 \uacbd\uacfc\uac00 \uc5c6\uc2b5\ub2c8\ub2e4." });
+  renderTimelineList(listEl, entries, site, { emptyText: "등록된 추진 경과가 없습니다." });
 }
 
-/* \uc77c\uc9c0(\ud154\ub808\uadf8\ub7a8) \ud56d\ubaa9: \uad6c\uc870\ud654\ub41c \uc0c1\ub2f4 \ud544\ub4dc\uac00 \uc788\uc73c\uba74 \ub77c\ubca8\ubcc4\ub85c \ubcf4\uae30 \uc88b\uac8c \ud45c\uc2dc, \uc218\uc815 \uac00\ub2a5 */
 function renderJournalPanel(site) {
   const panel = document.getElementById("siteDetailPanel");
   const listEl = panel.querySelector('[data-panel="journal"] .timeline-list');
   if (!listEl) return;
   const entries = buildCombinedTimeline(site).filter(e => e.source === "telegram");
 
-  const emptyMsg = `\uc544\uc9c1 \ub4f1\ub85d\ub41c \uc77c\uc9c0\uac00 \uc5c6\uc2b5\ub2c8\ub2e4. \ud154\ub808\uadf8\ub7a8\uc5d0 #${esc(site.name)} \ud0dc\uadf8\ub85c \uba54\uc2dc\uc9c0\ub97c \uc62c\ub824\ubcf4\uc138\uc694.`;
+  const emptyMsg = `아직 등록된 일지가 없습니다. 텔레그램에 #${esc(site.name)} 태그로 메시지를 올려보세요.`;
 
   listEl.innerHTML = entries.map((m, i) => {
     let fields = null;
     if (m.fieldsJson) { try { fields = JSON.parse(m.fieldsJson); } catch (e) { fields = null; } }
-    const fieldRows = fields ? Object.entries(fields).filter(([k]) => k !== "\ud604\uc7a5\uba85") : [];
+    const fieldRows = fields ? Object.entries(fields).filter(([k]) => k !== "현장명") : [];
 
     if (fieldRows.length) {
       return `
         <div class="journal-card" data-idx="${i}">
           <div class="journal-card-top">
             <span class="t-date">${esc(m.date || "")}</span>
-            ${isAdmin ? `<div class="journal-actions"><button class="j-edit">\uc218\uc815</button><button class="t-del">\u2715</button></div>` : ""}
+            ${isAdmin ? `<div class="journal-actions"><button class="j-edit">수정</button><button class="t-del">✕</button></div>` : ""}
           </div>
-          ${m.summary ? `<div class="journal-summary">\ud83d\udca1 ${esc(m.summary)}</div>` : ""}
+          ${m.summary ? `<div class="journal-summary">💡 ${esc(m.summary)}</div>` : ""}
           <div class="journal-fields">
             ${fieldRows.map(([k, v]) => `<div class="jf-row"><span class="jf-k">${esc(k)}</span><span class="jf-v">${esc(v)}</span></div>`).join("")}
           </div>
@@ -1141,8 +1097,8 @@ function renderJournalPanel(site) {
     return `
       <div class="timeline-item" data-idx="${i}">
         <span class="t-date">${esc(m.date || "")}</span>
-        <span><span class="tg-badge">\ud83d\udce9</span> ${esc(m.text || "")}</span>
-        ${isAdmin ? `<button class="j-edit">\uc218\uc815</button><button class="t-del">\u2715</button>` : ""}
+        <span><span class="tg-badge">📩</span> ${esc(m.text || "")}</span>
+        ${isAdmin ? `<button class="j-edit">수정</button><button class="t-del">✕</button>` : ""}
       </div>`;
   }).join("") || `<p class="hint">${emptyMsg}</p>`;
 
@@ -1157,7 +1113,7 @@ function renderJournalPanel(site) {
         persist();
       } else if (SERVER_BASE_URL && entry.remoteId) {
         try { await fetch(`${SERVER_BASE_URL}/api/journal/${entry.remoteId}`, { method: "DELETE" }); }
-        catch (e) { alert("\uc11c\ubc84 \uc77c\uc9c0 \uc0ad\uc81c\uc5d0 \uc2e4\ud328\ud588\uc2b5\ub2c8\ub2e4."); return; }
+        catch (e) { alert("서버 일지 삭제에 실패했습니다."); return; }
         serverJournalCache[site.name] = (serverJournalCache[site.name] || []).filter(r => r.id !== entry.remoteId);
       }
       renderJournalPanel(site);
@@ -1174,13 +1130,13 @@ function startJournalEdit(site, entry, containerEl) {
   containerEl.innerHTML = `
     <textarea class="journal-edit-textarea" rows="6">${esc(entry.text || "")}</textarea>
     <div class="journal-edit-actions">
-      <button class="btn btn-outline btn-sm j-cancel">\ucde8\uc18c</button>
-      <button class="btn btn-primary btn-sm j-save">\uc800\uc7a5</button>
+      <button class="btn btn-outline btn-sm j-cancel">취소</button>
+      <button class="btn btn-primary btn-sm j-save">저장</button>
     </div>`;
   containerEl.querySelector(".j-cancel").addEventListener("click", () => { containerEl.innerHTML = original; });
   containerEl.querySelector(".j-save").addEventListener("click", async () => {
     const newText = containerEl.querySelector(".journal-edit-textarea").value.trim();
-    if (!newText) { alert("\ub0b4\uc6a9\uc744 \uc785\ub825\ud558\uc138\uc694."); return; }
+    if (!newText) { alert("내용을 입력하세요."); return; }
     if (entry.local) {
       entry.ref.text = newText;
       persist();
@@ -1191,8 +1147,8 @@ function startJournalEdit(site, entry, containerEl) {
           method: "PUT", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: newText, date: entry.date })
         });
-        if (!res.ok) throw new Error("\uc11c\ubc84 \uc751\ub2f5 \uc624\ub958");
-      } catch (e) { alert("\uc218\uc815\uc5d0 \uc2e4\ud328\ud588\uc2b5\ub2c8\ub2e4: " + e.message); return; }
+        if (!res.ok) throw new Error("서버 응답 오류");
+      } catch (e) { alert("수정에 실패했습니다: " + e.message); return; }
       refreshServerJournal(site);
     }
   });
@@ -1206,7 +1162,6 @@ function refreshServerJournal(site) {
   });
 }
 
-/* ---------- 영업 메모 (영업 탭) ---------- */
 function renderSalesPanel(site) {
   const panel = document.getElementById("siteDetailPanel");
   const listEl = panel.querySelector('[data-panel="sales"] .timeline-list');
@@ -1227,7 +1182,6 @@ function renderSalesPanel(site) {
   });
 }
 
-/* ---------- 공고 (공고 탭, PDF/한글 파일 업로드) ---------- */
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1247,7 +1201,7 @@ async function fetchServerAnnouncements(siteName) {
   try {
     const res = await fetch(`${SERVER_BASE_URL}/api/announcements?site=${encodeURIComponent(siteName)}`);
     if (!res.ok) return [];
-    return await res.json(); // [{id, filename, size, uploaded_at, ...}]
+    return await res.json();
   } catch (e) {
     console.warn("서버 공고 목록 불러오기 실패:", e);
     return [];
@@ -1262,7 +1216,7 @@ async function renderNoticePanel(site) {
   if (SERVER_BASE_URL) {
     listEl.innerHTML = `<p class="hint">불러오는 중...</p>`;
     const files = await fetchServerAnnouncements(site.name);
-    if (currentDetailId !== site.id) return; // 그 사이 다른 현장으로 이동했으면 무시
+    if (currentDetailId !== site.id) return;
     listEl.innerHTML = files.map(f => `
       <div class="notice-item" data-id="${f.id}">
         <span class="notice-icon">📄</span>
@@ -1282,7 +1236,6 @@ async function renderNoticePanel(site) {
     return;
   }
 
-  // 서버 미연결: 브라우저 저장(localStorage, base64)으로 폴백
   const files = (site.announcements || []).slice().sort((a, b) => (b.uploadedAt || "").localeCompare(a.uploadedAt || ""));
   listEl.innerHTML = files.map((f, i) => `
     <div class="notice-item" data-idx="${i}">
@@ -1304,6 +1257,7 @@ async function renderNoticePanel(site) {
 function renderSiteDetail() {
   const site = sites.find(s => s.id === currentDetailId);
   if (!site) { closeSiteDetail(); return; }
+  document.body.classList.remove("contact-fullscreen");
   const panel = document.getElementById("siteDetailPanel");
 
   const stageIdx = Math.max(0, PIPELINE_STAGES.indexOf(site.pipelineStage || "미관리"));
@@ -1428,7 +1382,12 @@ function renderSiteDetail() {
       panel.querySelectorAll(".dtab-panel").forEach(p => p.classList.add("hidden"));
       tabBtn.classList.add("active");
       panel.querySelector(`[data-panel="${tabBtn.dataset.tab}"]`).classList.remove("hidden");
-      if (tabBtn.dataset.tab === "contact") renderContactTab(site);
+      if (tabBtn.dataset.tab === "contact") {
+        document.body.classList.add("contact-fullscreen");
+        renderContactTab(site);
+      } else {
+        document.body.classList.remove("contact-fullscreen");
+      }
     });
   });
 
@@ -1492,7 +1451,6 @@ function renderSiteDetail() {
       return;
     }
 
-    // 서버 미연결: 로컬(base64)로 폴백
     if (file.size > 4 * 1024 * 1024) {
       alert("파일이 너무 큽니다 (4MB 이하로 올려주세요). 브라우저 저장공간 한계 때문에 큰 파일은 저장이 안 될 수 있어요.");
       e.target.value = "";
@@ -1511,7 +1469,6 @@ function renderSiteDetail() {
   });
 }
 
-/* ---------- 현장 추가/수정 모달 ---------- */
 const siteModal = document.getElementById("siteModal");
 let editingId = null;
 
@@ -1540,7 +1497,6 @@ function openSiteModal(id) {
   set("f_note", site?.note);
   set("f_boundary", (site?.boundary || []).map(p => p.join(",")).join("\n"));
 
-  // 현장카드(인쇄 양식)용 항목
   set("f_address", site?.address); set("f_bizType", site?.bizType); set("f_zoneUse", site?.zoneUse);
   set("f_far", site?.far); set("f_bcr", site?.bcr); set("f_parking", site?.parking);
   set("f_rentalUnits", site?.rentalUnits); set("f_ltRentUnits", site?.ltRentUnits);
@@ -1554,7 +1510,6 @@ function openSiteModal(id) {
   siteModal.classList.remove("hidden");
 }
 
-/* ---------- 집행부 입력 행 (여러 명 등록) ---------- */
 function renderExecRows(list) {
   const box = document.getElementById("execRows");
   if (!box) return;
@@ -1627,7 +1582,6 @@ document.getElementById("siteSave").addEventListener("click", () => {
     nextEventNote: document.getElementById("f_nextEventNote").value.trim(),
     note: document.getElementById("f_note").value.trim(),
     boundary,
-    // 현장카드(인쇄 양식)용 항목
     address: document.getElementById("f_address").value.trim(),
     bizType: document.getElementById("f_bizType").value.trim(),
     zoneUse: document.getElementById("f_zoneUse").value.trim(),
@@ -1669,7 +1623,6 @@ document.getElementById("siteDelete").addEventListener("click", () => {
   closeSiteModal();
 });
 
-/* ---------- 백업 저장/복원 (JSON) ---------- */
 document.getElementById("btnSaveBackup").addEventListener("click", () => {
   const payload = {
     savedAt: new Date().toISOString(),
@@ -1707,7 +1660,6 @@ document.getElementById("backupFileInput").addEventListener("change", e => {
   e.target.value = "";
 });
 
-/* ---------- 엑셀 업로드 / 양식 다운로드 ---------- */
 document.getElementById("btnExcelUpload").addEventListener("click", () => {
   document.getElementById("excelFileInput").click();
 });
@@ -1731,7 +1683,6 @@ document.getElementById("excelFileInput").addEventListener("change", e => {
       });
       site.name = name; site.city = city; site.district = district;
 
-      // "구역 경계 좌표" 열: "위도,경도" 쌍을 세미콜론(;) 또는 줄바꿈으로 구분해 입력.
       const boundaryRaw = String(site.boundaryText || "").trim();
       site.boundary = boundaryRaw
         ? boundaryRaw.split(/[;\n]/).map(pair => {
@@ -1759,15 +1710,12 @@ document.getElementById("btnTemplateDownload").addEventListener("click", () => {
   XLSX.writeFile(wb, "현장추가_양식.xlsx");
 });
 
-/* ---------- 인쇄 ---------- */
 document.getElementById("btnPrint").addEventListener("click", () => window.print());
 
-/* ---------- 사무실명 저장 ---------- */
 const officeInput = document.getElementById("officeName");
 officeInput.value = localStorage.getItem(OFFICE_KEY) || officeInput.value;
 officeInput.addEventListener("change", () => localStorage.setItem(OFFICE_KEY, officeInput.value));
 
-/* ---------- 유틸 ---------- */
 function esc(str) {
   return String(str ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
@@ -1788,9 +1736,6 @@ function dateStamp() {
   return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
 }
 
-/* =========================================================
-   구역 좌표 추출 모달
-   ========================================================= */
 let bpMap, bpPolygon, bpMarkers = [], bpPoints = [], bpGeocoder;
 let bpCadastralOn = false;
 let bpAllZones = null;
@@ -1838,7 +1783,7 @@ document.getElementById("bpZoneSearch").addEventListener("input", () => {
 });
 
 function bpLoadZoneFromGeojson(feature) {
-  const ring = feature.geometry.coordinates[0]; // [lng, lat]
+  const ring = feature.geometry.coordinates[0];
   bpPoints = ring.map(([lng, lat]) => new kakao.maps.LatLng(lat, lng));
   bpRedraw();
   const bounds = new kakao.maps.LatLngBounds();
@@ -1867,7 +1812,6 @@ function openBoundaryPicker() {
   boundaryPickerModal.classList.remove("hidden");
   bpEnsureZonesLoaded();
 
-  // 기존에 입력돼 있던 좌표가 있으면 그대로 불러와서 이어서 수정 가능
   const existingText = document.getElementById("f_boundary").value.trim();
   bpPoints = existingText
     ? existingText.split("\n").map(line => {
@@ -1888,7 +1832,6 @@ function openBoundaryPicker() {
     });
   }
 
-  // 폼에 위도/경도가 이미 있으면 그 위치로, 기존 좌표가 있으면 그 범위로 이동
   const fLat = Number(document.getElementById("f_lat").value);
   const fLng = Number(document.getElementById("f_lng").value);
   if (bpPoints.length) {
@@ -1976,13 +1919,8 @@ document.getElementById("boundaryPickerApply").addEventListener("click", () => {
   closeBoundaryPicker();
 });
 
-/* ---------- 시작 시 비밀번호 설정 불러오기 ---------- */
 loadAuthConfig();
 
-/* =========================================================
-   현장카드 인쇄 (A4 가로 1장)
-   상세 패널의 "현장카드 인쇄" 버튼에서 호출됩니다.
-   ========================================================= */
 let _printMapObj = null;
 
 function pcNum(v) {
@@ -2151,7 +2089,7 @@ function printSiteCard(site) {
   if (!box) { alert("인쇄 영역을 찾을 수 없습니다. index.html이 최신인지 확인해주세요."); return; }
 
   box.innerHTML = buildSiteCardHtml(site);
-  box.style.display = "block"; // 지도 렌더링을 위해 잠시 화면에 올림
+  box.style.display = "block";
   box.style.position = "fixed";
   box.style.left = "-9999px";
   box.style.top = "0";
@@ -2168,7 +2106,6 @@ function printSiteCard(site) {
   };
 
   if (mapEl && typeof kakao !== "undefined" && kakao.maps) {
-    // 화면 밖에 두면 타일이 안 그려지므로, 인쇄 직전에만 화면 안쪽으로 옮김
     box.style.left = "0";
     box.style.top = "0";
     box.style.zIndex = "-1";
@@ -2193,7 +2130,6 @@ function printSiteCard(site) {
       _printMapObj.setLevel(4);
     }
 
-    // 타일이 다 그려질 시간을 준 뒤 인쇄
     setTimeout(() => {
       _printMapObj.relayout();
       setTimeout(() => {
