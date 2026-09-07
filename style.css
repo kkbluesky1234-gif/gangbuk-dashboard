@@ -529,3 +529,12 @@ body:not(.is-admin) .admin-only{display:none;}
 .bp-zonehit{padding:6px 8px;background:#fff;border:1px solid var(--slate-300);border-radius:6px;margin-bottom:4px;cursor:pointer;font-size:12px;color:var(--navy-950);}
 .bp-zonehit:hover{background:var(--slate-100);}
 .bp-zonehit .bp-cat{color:var(--slate-500);font-size:10.5px;margin-top:2px;}
+
+body.contact-fullscreen #siteListPanel,
+body.contact-fullscreen #mapWrap { display: none; }
+body.contact-fullscreen #siteDetailPanel {
+  width: 100%;
+  min-width: 0;
+  flex: 1;
+  border-right: none;
+}
