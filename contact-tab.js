@@ -988,8 +988,13 @@ function formatDateLocal(d) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
+function excelSerialToDate(serial) {
+  const utcDays = Math.floor(serial - 25569);
+  return new Date(utcDays * 86400 * 1000);
+}
+
 function importMasterRegistryExcel(site, binary) {
-  const wb = XLSX.read(binary, { type: "binary", cellDates: true });
+  const wb = XLSX.read(binary, { type: "binary", cellDates: false });
 
   // "시공사성향"과 "친밀도" 헤더가 둘 다 있는 시트를 자동으로 찾음
   let targetSheet = null, rows = null;
@@ -1017,16 +1022,18 @@ function importMasterRegistryExcel(site, binary) {
   }
   const intimacyEnd = surveyStart > intimacyStart ? surveyStart : intimacyStart + 3;
 
-  // 날짜 칸: 헤더 행(1~4행) 어딘가에 실제 날짜(Date)가 들어있는 열들을 전부 수집
+  // 날짜 칸: 헤더 행(1~4행)에서 "엑셀 날짜 일련번호로 보이는 숫자"(대략 2009~2064년 범위)를 가진 열을 모두 찾음.
+  // (화면엔 "1","2"처럼 보여도 실제로는 날짜값인 경우까지 정확히 잡기 위해, 서식 자동판별에 의존하지 않고 직접 계산합니다.)
   let dateCols = [];
-  for (const row of headerRows) {
+  let dateHeaderRowIdx = -1;
+  for (let ri = 0; ri < headerRows.length; ri++) {
+    const row = headerRows[ri];
     if (!row) continue;
-    row.forEach((v, c) => { if (v instanceof Date) dateCols.push(c); });
-    if (dateCols.length) break;
+    const found = [];
+    row.forEach((v, c) => { if (typeof v === "number" && v > 40000 && v < 60000) found.push(c); });
+    if (found.length > 5) { dateCols = found; dateHeaderRowIdx = ri; break; }
   }
-  dateCols = [...new Set(dateCols)].sort((a, b) => a - b);
   if (!dateCols.length) { alert("날짜별 접촉 칸을 찾지 못했습니다."); return; }
-  const dateHeaderRowIdx = headerRows.findIndex(row => row && row[dateCols[0]] instanceof Date);
   const dateHeaderRow = headerRows[dateHeaderRowIdx];
 
   const stanceLabelRow = headerRows[headerRows.findIndex(r => r && r[stanceStart + 1])] || headerRows[3] || [];
@@ -1059,9 +1066,9 @@ function importMasterRegistryExcel(site, binary) {
     dateCols.forEach(c => {
       const v = row[c];
       if (!v) return;
-      const dateVal = dateHeaderRow[c];
-      if (!(dateVal instanceof Date)) return;
-      const dateStr = formatDateLocal(dateVal);
+      const serial = dateHeaderRow[c];
+      if (typeof serial !== "number") return;
+      const dateStr = formatDateLocal(excelSerialToDate(serial));
       const key = `${name}__${dateStr}`;
       if (existingKeys.has(key)) return;
       existingKeys.add(key);
