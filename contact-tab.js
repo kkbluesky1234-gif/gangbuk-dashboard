@@ -71,10 +71,13 @@ function printContactTab(size) {
   }
   styleTag.textContent = `@page { size: ${size} landscape; margin: 10mm; }`;
   document.body.classList.add("printing-contact");
-  window.print();
-  setTimeout(() => {
+  const cleanup = () => {
     document.body.classList.remove("printing-contact");
-  }, 500);
+    styleTag.textContent = "";
+    window.removeEventListener("afterprint", cleanup);
+  };
+  window.addEventListener("afterprint", cleanup);
+  window.print();
 }
 
 /* ---------- 메인 렌더 ---------- */
