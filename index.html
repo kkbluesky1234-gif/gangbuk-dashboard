@@ -75,8 +75,8 @@
 
 @media print {
   html, body { height: auto !important; margin: 0 !important; padding: 0 !important; }
-  body > *:not(#printCard) { display: none !important; }
-  #printCard { display: block !important; }
+  body:not(.printing-contact) > *:not(#printCard) { display: none !important; }
+  body:not(.printing-contact) #printCard { display: block !important; }
   #printCard .pc-sheet {
     width: 100% !important; height: 190mm !important; min-height: 190mm !important;
     padding: 0 !important; display: flex !important; flex-direction: column !important;
