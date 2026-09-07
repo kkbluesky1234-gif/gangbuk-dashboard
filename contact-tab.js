@@ -143,12 +143,7 @@ function renderContactTab(site) {
         <select id="ctWeeklyMonthSelect" style="border:1px solid var(--slate-300);border-radius:6px;padding:5px 8px;font-size:12px"></select>
       </div>
       <div id="ctWeeklyMetrics" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px"></div>
-      <div style="overflow-x:auto;margin-bottom:14px">
-        <table style="width:100%;border-collapse:collapse;font-size:12px" id="ctWeeklyTable">
-          <thead><tr id="ctWeeklyHeadRow" style="border-bottom:1px solid var(--slate-300)"></tr></thead>
-          <tbody id="ctWeeklyBody"></tbody>
-        </table>
-      </div>
+      <div id="ctWeeklyByChajang" style="margin-bottom:14px"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
         <div>
           <div class="hint" style="margin-bottom:6px">이 달 주차별 총 접촉 건수</div>
@@ -527,7 +522,6 @@ function renderWeeklyPersonSection(site) {
     byName[c.name].chajang = c.chajang || byName[c.name].chajang;
   });
   const people = Object.entries(byName).map(([name, d]) => ({ name, ...d }));
-  people.sort((a, b) => (a.chajang || "").localeCompare(b.chajang || "") || a.name.localeCompare(b.name));
 
   // 요약 카드
   const totalPeople = people.length;
@@ -547,24 +541,52 @@ function renderWeeklyPersonSection(site) {
       <div style="font-size:20px;font-weight:800;color:var(--accent)">${totalCount}건</div>
     </div>`;
 
-  // 표: 이름 / 담당 / 구분 / 1주~5주 / 합계
-  const headRow = document.getElementById("ctWeeklyHeadRow");
-  headRow.innerHTML = `
-    <th style="text-align:left;padding:5px 4px;color:var(--slate-500)">이름</th>
-    <th style="text-align:left;padding:5px 4px;color:var(--slate-500)">담당</th>
-    <th style="text-align:left;padding:5px 4px;color:var(--slate-500)">구분</th>
-    ${[1, 2, 3, 4, 5].map(w => `<th style="text-align:right;padding:5px 4px;color:var(--slate-500)">${w}주</th>`).join("")}
-    <th style="text-align:right;padding:5px 4px;color:var(--slate-500);font-weight:700">합계</th>`;
+  // 차장별로 묶고, 그 안에서 임대의원/조합원으로 나눔
+  const byChajang = {};
+  people.forEach(p => {
+    const key = p.chajang || "(담당 미지정)";
+    if (!byChajang[key]) byChajang[key] = { 임대의원: [], 조합원: [] };
+    const bucket = p.type === "임대의원" ? "임대의원" : "조합원";
+    byChajang[key][bucket].push(p);
+  });
+  const chajangNames = Object.keys(byChajang).sort((a, b) => a.localeCompare(b));
 
-  const body = document.getElementById("ctWeeklyBody");
-  body.innerHTML = people.map(p => `
-    <tr style="border-bottom:1px solid var(--slate-100)">
-      <td style="padding:4px">${esc(p.name)}</td>
-      <td style="padding:4px">${esc(p.chajang || "-")}</td>
-      <td style="padding:4px">${esc(roleLabel(p))}</td>
-      ${[1, 2, 3, 4, 5].map(w => `<td style="text-align:right;padding:4px">${p.weeks[w] ? fmtNum(p.weeks[w]) : "-"}</td>`).join("")}
-      <td style="text-align:right;padding:4px;font-weight:700">${fmtNum(p.total)}</td>
-    </tr>`).join("") || `<tr><td colspan="9" style="padding:14px 4px;color:var(--slate-500)">이 달 접촉 기록이 없습니다.</td></tr>`;
+  function weeksHtml(p) {
+    return [1, 2, 3, 4, 5].map(w => `<td style="text-align:right;padding:4px">${p.weeks[w] ? fmtNum(p.weeks[w]) : "-"}</td>`).join("");
+  }
+  function miniTable(title, list) {
+    const sum = list.reduce((s, p) => s + p.total, 0);
+    return `
+      <div style="flex:1;min-width:280px">
+        <div style="font-size:12.5px;font-weight:700;margin-bottom:6px">${title} <span style="color:var(--slate-500);font-weight:400">(${list.length}명 · ${sum}건)</span></div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead>
+            <tr style="border-bottom:1px solid var(--slate-300)">
+              <th style="text-align:left;padding:4px;color:var(--slate-500)">이름</th>
+              ${[1, 2, 3, 4, 5].map(w => `<th style="text-align:right;padding:4px;color:var(--slate-500)">${w}주</th>`).join("")}
+              <th style="text-align:right;padding:4px;color:var(--slate-500);font-weight:700">합계</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${list.map(p => `<tr style="border-bottom:1px solid var(--slate-100)"><td style="padding:4px">${esc(p.name)}</td>${weeksHtml(p)}<td style="text-align:right;padding:4px;font-weight:700">${fmtNum(p.total)}</td></tr>`).join("")
+              || `<tr><td colspan="7" style="padding:8px 4px;color:var(--slate-500)">없음</td></tr>`}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  const container = document.getElementById("ctWeeklyByChajang");
+  container.innerHTML = chajangNames.map(name => {
+    const g = byChajang[name];
+    return `
+      <div style="border:1px solid var(--slate-100);border-radius:8px;padding:12px;margin-bottom:12px">
+        <div style="font-size:13.5px;font-weight:800;margin-bottom:10px">👤 ${esc(name)}</div>
+        <div style="display:flex;gap:20px;flex-wrap:wrap">
+          ${miniTable("임대의원", g.임대의원)}
+          ${miniTable("조합원", g.조합원)}
+        </div>
+      </div>`;
+  }).join("") || `<p class="hint">이 달 접촉 기록이 없습니다.</p>`;
 
   rebuildWeeklyCharts(site, people, months);
 }
