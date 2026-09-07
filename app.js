@@ -2104,6 +2104,7 @@ function printSiteCard(site) {
     box.style.display = "";
     const ctStyleTag = document.getElementById("ctPrintPageSize");
     if (ctStyleTag) ctStyleTag.textContent = "";
+    document.body.classList.remove("printing-contact");
     window.print();
   };
 
