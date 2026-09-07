@@ -75,16 +75,44 @@
 
 @media print {
   html, body { height: auto !important; margin: 0 !important; padding: 0 !important; }
+
+  /* ---- 현장카드 인쇄 (기존 기능: "현장카드 인쇄" 버튼) ---- */
   body:not(.printing-contact) > *:not(#printCard) { display: none !important; }
   body:not(.printing-contact) #printCard { display: block !important; }
-  #printCard .pc-sheet {
+  body:not(.printing-contact) #printCard .pc-sheet {
     width: 100% !important; height: 190mm !important; min-height: 190mm !important;
     padding: 0 !important; display: flex !important; flex-direction: column !important;
     page-break-after: avoid;
   }
-  #printCard .pc-body { flex: 1 1 auto !important; min-height: 0 !important; }
+  body:not(.printing-contact) #printCard .pc-body { flex: 1 1 auto !important; min-height: 0 !important; }
+  body:not(.printing-contact) { }
   @page { size: A4 landscape; margin: 7mm; }
   * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+
+  /* ---- 접촉현황 탭 인쇄 (새 기능: "A4로 인쇄"/"A3로 인쇄" 버튼) ---- */
+  /* body에 접촉현황용 페이지 크기가 JS로 주입되므로, 여기서는 레이아웃만 강제합니다. */
+  body.printing-contact > *:not(#siteDetailPanel) { display: none !important; }
+  body.printing-contact #siteDetailPanel {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  body.printing-contact .detail-top,
+  body.printing-contact .detail-tags,
+  body.printing-contact .detail-title,
+  body.printing-contact .detail-sub,
+  body.printing-contact .stepper,
+  body.printing-contact .detail-tabs { display: none !important; }
+  body.printing-contact .dtab-panel:not([data-panel="contact"]) { display: none !important; }
+  body.printing-contact .dtab-panel[data-panel="contact"] {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+  body.printing-contact .detail-card { break-inside: avoid; }
 }
 </style>
 </head>
