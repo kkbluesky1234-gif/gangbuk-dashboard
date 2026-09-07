@@ -16,8 +16,8 @@ const DEFAULT_EVENT_TYPES = ["투어", "간담회", "설문조사"];
 const EVENT_COLORS = ["#378add", "#d85a30", "#1d9e75", "#8b5cf6", "#f59e0b"];
 const PERIOD_MODES = [["day", "일별"], ["week", "주별"], ["month", "월별"]];
 
-const _contactCharts = {}; // siteId -> { contact, stance, sentiment, intimacy, event }
-const _contactState = {}; // siteId -> { selectedChajang: Set, period: "day"|"week"|"month" }
+const _contactCharts = {};
+const _contactState = {};
 
 function ensureContactData(site) {
   site.contacts = site.contacts || [];
@@ -31,7 +31,7 @@ function monthKeyOf(dateStr) {
 function weekKeyOf(dateStr) {
   if (!dateStr) return "";
   const d = new Date(dateStr + "T00:00:00");
-  const day = (d.getDay() + 6) % 7; // 월요일 시작
+  const day = (d.getDay() + 6) % 7;
   d.setDate(d.getDate() - day);
   return d.toISOString().slice(0, 10);
 }
@@ -58,6 +58,22 @@ function destroyContactCharts(siteId) {
   delete _contactCharts[siteId];
 }
 
+/* ---------- 인쇄 ---------- */
+function printContactTab(size) {
+  let styleTag = document.getElementById("ctPrintPageSize");
+  if (!styleTag) {
+    styleTag = document.createElement("style");
+    styleTag.id = "ctPrintPageSize";
+    document.head.appendChild(styleTag);
+  }
+  styleTag.textContent = `@page { size: ${size} landscape; margin: 10mm; }`;
+  document.body.classList.add("printing-contact");
+  window.print();
+  setTimeout(() => {
+    document.body.classList.remove("printing-contact");
+  }, 500);
+}
+
 /* ---------- 메인 렌더 ---------- */
 function renderContactTab(site) {
   ensureContactData(site);
@@ -69,6 +85,11 @@ function renderContactTab(site) {
   if (state.selectedChajang === null) state.selectedChajang = new Set(chajangList);
 
   panel.innerHTML = `
+    <div class="detail-card" style="display:flex;justify-content:flex-end;gap:6px">
+      <button id="ctPrintA4" class="btn btn-outline btn-sm">🖨 A4로 인쇄</button>
+      <button id="ctPrintA3" class="btn btn-outline btn-sm">🖨 A3로 인쇄</button>
+    </div>
+
     <div class="detail-card">
       <div class="detail-card-head"><h4>차장 선택</h4></div>
       <div id="ctChajangPills" style="display:flex;gap:6px;flex-wrap:wrap"></div>
@@ -346,7 +367,6 @@ function rebuildContactCharts(site) {
   const contacts = selectedContacts(site);
   const state = contactStateFor(site.id);
 
-  // 요약 카드
   const metricsBox = document.getElementById("ctMetrics");
   const uniqueNames = new Set(contacts.map(c => c.name).filter(Boolean));
   let poscoLike = 0, upCount = 0;
@@ -378,7 +398,6 @@ function rebuildContactCharts(site) {
       <div style="font-size:20px;font-weight:800">${totalEvents}명</div>
     </div>`;
 
-  // 접촉 인원 추이 (일/주/월 선택 가능)
   const rangeKeys = buildRangeKeys(contacts.map(c => c.date), state.period);
   const rentData = rangeKeys.map(k => contacts.filter(c => c.type === "임대의원" && groupKeyOf(c.date, state.period) === k).length);
   const unionData = rangeKeys.map(k => contacts.filter(c => c.type === "조합원" && groupKeyOf(c.date, state.period) === k).length);
@@ -395,7 +414,6 @@ function rebuildContactCharts(site) {
     options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
   });
 
-  // 현재 시공사 지지 분포 (인원별 최신 기록 기준)
   const latestStance = {};
   Object.entries(byName).forEach(([name, list]) => {
     const sorted = list.slice().sort((a, b) => (a.date || "").localeCompare(b.date || ""));
@@ -412,7 +430,6 @@ function rebuildContactCharts(site) {
     options: { responsive: true, maintainAspectRatio: false, cutout: "60%" }
   });
 
-  // 성향 변화 추이 (월별 비중 — 큰 흐름을 보는 용도라 항상 월 단위)
   const contactMonths = buildMonthRange(contacts.map(c => c.date));
   charts.sentiment = new Chart(document.getElementById("ctSentimentChart"), {
     type: "line",
@@ -433,7 +450,6 @@ function rebuildContactCharts(site) {
     options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, max: 100, ticks: { callback: v => v + "%" } } } }
   });
 
-  // 친밀도 변화 집계
   let up = 0, down = 0, same = 0;
   Object.values(byName).forEach(list => {
     if (list.length < 2) { same++; return; }
@@ -476,7 +492,6 @@ function rebuildContactCharts(site) {
     options: { responsive: true, maintainAspectRatio: false, scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } }
   });
 
-  // 월별 행사 개최 현황
   const eventMonths = buildMonthRange(site.specialEvents.map(e => e.date));
   const eventTypesUsed = [...new Set(site.specialEvents.map(e => e.type).filter(Boolean))];
   const typesForChart = eventTypesUsed.length ? eventTypesUsed : DEFAULT_EVENT_TYPES;
@@ -499,6 +514,9 @@ function rebuildContactCharts(site) {
 
 /* ---------- 버튼 동작 ---------- */
 function bindContactTabEvents(site) {
+  document.getElementById("ctPrintA4")?.addEventListener("click", () => printContactTab("A4"));
+  document.getElementById("ctPrintA3")?.addEventListener("click", () => printContactTab("A3"));
+
   document.getElementById("ctAddCompany")?.addEventListener("click", () => {
     const name = prompt("추가할 시공사 이름을 입력하세요.");
     if (!name || !name.trim()) return;
