@@ -3,6 +3,8 @@
    현장별로 차장이 임대의원/조합원을 얼마나 만났는지,
    시공사 지지 성향이 어떻게 바뀌는지, 친밀도(상/중/하) 변화,
    투어/간담회/설문조사 같은 특별행사 이력을 관리합니다.
+   그리고 실제 업무에서 쓰는 "담당별 접촉현황 집계" 엑셀 시트를
+   월 단위로 업로드해서 차장별 상담/단순/TM 그래프도 볼 수 있습니다.
 
    이 파일은 app.js 전역 변수/함수(esc, fmtNum, persist, sites,
    currentDetailId, isAdmin)를 그대로 사용합니다. app.js보다
@@ -16,13 +18,14 @@ const DEFAULT_EVENT_TYPES = ["투어", "간담회", "설문조사"];
 const EVENT_COLORS = ["#378add", "#d85a30", "#1d9e75", "#8b5cf6", "#f59e0b"];
 const PERIOD_MODES = [["day", "일별"], ["week", "주별"], ["month", "월별"]];
 
-const _contactCharts = {};
-const _contactState = {};
+const _contactCharts = {}; // siteId -> { contact, stance, sentiment, intimacy, event, monthly }
+const _contactState = {}; // siteId -> { selectedChajang: Set, period, selectedStatMonth }
 
 function ensureContactData(site) {
   site.contacts = site.contacts || [];
   site.companies = site.companies || ["포스코"];
   site.specialEvents = site.specialEvents || [];
+  site.monthlyChajangStats = site.monthlyChajangStats || []; // [{month, chajang, headcount, 상담,단순,TM,합계,거부,부재,불명,미접촉}]
 }
 
 function monthKeyOf(dateStr) {
@@ -47,7 +50,7 @@ function groupLabel(key, mode) {
 }
 
 function contactStateFor(siteId) {
-  if (!_contactState[siteId]) _contactState[siteId] = { selectedChajang: null, period: "month" };
+  if (!_contactState[siteId]) _contactState[siteId] = { selectedChajang: null, period: "month", selectedStatMonth: null };
   return _contactState[siteId];
 }
 
@@ -91,7 +94,39 @@ function renderContactTab(site) {
     </div>
 
     <div class="detail-card">
-      <div class="detail-card-head"><h4>차장 선택</h4></div>
+      <div class="detail-card-head">
+        <h4>월별 담당자 접촉현황 집계</h4>
+        <div style="display:flex;gap:6px;align-items:center">
+          <select id="ctStatMonthSelect" style="border:1px solid var(--slate-300);border-radius:6px;padding:5px 8px;font-size:12px"></select>
+          <input type="file" id="ctStatExcelFile" accept=".xlsx,.xls" class="hidden">
+          <button id="ctStatExcelUpload" class="btn btn-outline btn-sm admin-only">📊 담당별 집계 엑셀 업로드</button>
+        </div>
+      </div>
+      <p class="hint" style="margin-bottom:10px">기존에 쓰시는 "OO집계" 시트가 있는 엑셀 파일을 그대로 업로드하세요 (담당/인원/상담/단순/TM/거부/부재/불명/미접촉 열이 있는 표).</p>
+      <div style="position:relative;height:220px;margin-bottom:14px"><canvas id="ctMonthlyStatChart"></canvas></div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead>
+            <tr style="border-bottom:1px solid var(--slate-300)">
+              <th style="text-align:left;padding:5px 4px;color:var(--slate-500)">담당</th>
+              <th style="text-align:right;padding:5px 4px;color:var(--slate-500)">인원</th>
+              <th style="text-align:right;padding:5px 4px;color:var(--slate-500)">상담</th>
+              <th style="text-align:right;padding:5px 4px;color:var(--slate-500)">단순</th>
+              <th style="text-align:right;padding:5px 4px;color:var(--slate-500)">TM</th>
+              <th style="text-align:right;padding:5px 4px;color:var(--slate-500)">합계</th>
+              <th style="text-align:right;padding:5px 4px;color:var(--slate-500)">거부</th>
+              <th style="text-align:right;padding:5px 4px;color:var(--slate-500)">부재</th>
+              <th style="text-align:right;padding:5px 4px;color:var(--slate-500)">불명</th>
+              <th style="text-align:right;padding:5px 4px;color:var(--slate-500)">미접촉</th>
+            </tr>
+          </thead>
+          <tbody id="ctStatBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="detail-card">
+      <div class="detail-card-head"><h4>차장 선택 (아래 개별 접촉기록 기준)</h4></div>
       <div id="ctChajangPills" style="display:flex;gap:6px;flex-wrap:wrap"></div>
     </div>
 
@@ -102,7 +137,7 @@ function renderContactTab(site) {
 
     <div class="detail-card">
       <div class="detail-card-head">
-        <h4>접촉 인원 추이</h4>
+        <h4>개별 접촉 인원 추이</h4>
         <div id="ctPeriodPills" style="display:flex;gap:6px"></div>
       </div>
       <div style="position:relative;height:220px"><canvas id="ctContactChart"></canvas></div>
@@ -134,7 +169,7 @@ function renderContactTab(site) {
 
     <div class="detail-card">
       <div class="detail-card-head">
-        <h4>접촉 대상자 명단</h4>
+        <h4>접촉 대상자 명단 (개별 기록)</h4>
         <div style="display:flex;gap:6px">
           <button id="ctExcelUpload" class="btn btn-outline btn-sm admin-only">엑셀 업로드</button>
           <button id="ctExcelTemplate" class="btn btn-ghost btn-sm">양식 다운로드</button>
@@ -190,6 +225,7 @@ function renderContactTab(site) {
   renderCompanyTags(site);
   renderContactTable(site);
   renderEventTable(site);
+  renderMonthlyStatSection(site);
   rebuildContactCharts(site);
   bindContactTabEvents(site);
 }
@@ -201,7 +237,7 @@ function renderChajangPills(site) {
   const chajangList = [...new Set(site.contacts.map(c => c.chajang).filter(Boolean))].sort();
 
   if (!chajangList.length) {
-    box.innerHTML = `<p class="hint">등록된 접촉 기록이 없습니다. 아래에서 접촉 기록을 추가해보세요.</p>`;
+    box.innerHTML = `<p class="hint">등록된 개별 접촉 기록이 없습니다. 아래에서 추가해보세요.</p>`;
     return;
   }
   box.innerHTML = chajangList.map(name => {
@@ -269,7 +305,7 @@ function stanceOptionsHtml(site, val) {
   return opts.map(o => `<option ${o === val ? "selected" : ""}>${esc(o)}</option>`).join("");
 }
 
-/* ---------- 접촉 대상자 명단 ---------- */
+/* ---------- 접촉 대상자 명단 (개별 기록) ---------- */
 function renderContactTable(site) {
   const body = document.getElementById("ctContactBody");
   const rows = selectedContacts(site).slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
@@ -351,7 +387,122 @@ function renderEventTable(site) {
   });
 }
 
-/* ---------- 집계 + 차트 ---------- */
+/* =========================================================
+   월별 담당자 접촉현황 집계 (엑셀 "OO집계" 시트 업로드)
+   ========================================================= */
+function renderMonthlyStatSection(site) {
+  const state = contactStateFor(site.id);
+  const months = [...new Set(site.monthlyChajangStats.map(s => s.month))].sort();
+  if (!state.selectedStatMonth || !months.includes(state.selectedStatMonth)) {
+    state.selectedStatMonth = months.length ? months[months.length - 1] : null;
+  }
+
+  const sel = document.getElementById("ctStatMonthSelect");
+  sel.innerHTML = months.length
+    ? months.map(m => `<option value="${m}" ${m === state.selectedStatMonth ? "selected" : ""}>${m}</option>`).join("")
+    : `<option value="">업로드된 월 없음</option>`;
+  sel.onchange = () => { state.selectedStatMonth = sel.value; renderMonthlyStatSection(site); rebuildMonthlyStatChart(site); };
+
+  const rows = site.monthlyChajangStats.filter(s => s.month === state.selectedStatMonth);
+  const body = document.getElementById("ctStatBody");
+  body.innerHTML = rows.map(s => `
+    <tr style="border-bottom:1px solid var(--slate-100)">
+      <td style="padding:4px">${esc(s.chajang)}</td>
+      <td style="text-align:right;padding:4px">${fmtNum(s.headcount)}</td>
+      <td style="text-align:right;padding:4px">${fmtNum(s.상담)}</td>
+      <td style="text-align:right;padding:4px">${fmtNum(s.단순)}</td>
+      <td style="text-align:right;padding:4px">${fmtNum(s.TM)}</td>
+      <td style="text-align:right;padding:4px;font-weight:700">${fmtNum(s.합계)}</td>
+      <td style="text-align:right;padding:4px;color:var(--slate-500)">${fmtNum(s.거부)}</td>
+      <td style="text-align:right;padding:4px;color:var(--slate-500)">${fmtNum(s.부재)}</td>
+      <td style="text-align:right;padding:4px;color:var(--slate-500)">${fmtNum(s.불명)}</td>
+      <td style="text-align:right;padding:4px;color:var(--slate-500)">${fmtNum(s.미접촉)}</td>
+    </tr>`).join("") || `<tr><td colspan="10" style="padding:14px 4px;color:var(--slate-500)">이 월에 업로드된 집계가 없습니다.</td></tr>`;
+
+  rebuildMonthlyStatChart(site);
+}
+
+function rebuildMonthlyStatChart(site) {
+  if (typeof Chart === "undefined") return;
+  const state = contactStateFor(site.id);
+  const canvas = document.getElementById("ctMonthlyStatChart");
+  if (!canvas) return;
+  if (_contactCharts[site.id]?.monthly) _contactCharts[site.id].monthly.destroy();
+
+  const rows = site.monthlyChajangStats.filter(s => s.month === state.selectedStatMonth);
+  const chart = new Chart(canvas, {
+    type: "bar",
+    data: {
+      labels: rows.map(s => s.chajang),
+      datasets: [
+        { label: "상담", data: rows.map(s => s.상담), backgroundColor: "#378add", borderRadius: 4 },
+        { label: "단순", data: rows.map(s => s.단순), backgroundColor: "#eda100", borderRadius: 4 },
+        { label: "TM", data: rows.map(s => s.TM), backgroundColor: "#1d9e75", borderRadius: 4 }
+      ]
+    },
+    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+  });
+
+  if (!_contactCharts[site.id]) _contactCharts[site.id] = {};
+  _contactCharts[site.id].monthly = chart;
+}
+
+function numAt(row, idx) {
+  const v = row[idx];
+  const n = Number(v);
+  return isNaN(n) ? 0 : n;
+}
+
+function importMonthlyStatExcel(site, binary) {
+  const month = prompt("이 데이터는 몇 월 기준인가요? (예: 2026-09)", new Date().toISOString().slice(0, 7));
+  if (!month || !/^\d{4}-\d{2}$/.test(month.trim())) { alert("월 형식이 올바르지 않습니다. 예: 2026-09"); return; }
+  const monthKey = month.trim();
+
+  const wb = XLSX.read(binary, { type: "binary" });
+  const sheetName = wb.SheetNames.find(n => n.includes("집계") && !n.includes("주차"));
+  if (!sheetName) { alert('"집계"라는 이름이 들어간 시트를 찾지 못했습니다. (예: "OO집계")'); return; }
+
+  const sheet = wb.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+  // 1~4행: 제목/헤더, 5행부터 데이터. B열(idx1)=담당, C열(idx2)=인원,
+  // D~G(idx3~6)=금일 상담/단순/TM/누계, I~L(idx8~11)=금일 거부/부재/불명/미접촉,
+  // M~P(idx12~15)=누계 상담/단순/TM/합계, R~U(idx17~20)=누계 거부/부재/불명/미접촉
+  let added = 0;
+  for (let i = 4; i < rows.length; i++) {
+    const row = rows[i];
+    const chajang = String(row[1] || "").trim();
+    if (!chajang) continue;
+
+    const entry = {
+      month: monthKey,
+      chajang,
+      headcount: numAt(row, 2),
+      상담: numAt(row, 12),
+      단순: numAt(row, 13),
+      TM: numAt(row, 14),
+      합계: numAt(row, 15),
+      거부: numAt(row, 17),
+      부재: numAt(row, 18),
+      불명: numAt(row, 19),
+      미접촉: numAt(row, 20)
+    };
+
+    const existingIdx = site.monthlyChajangStats.findIndex(s => s.month === monthKey && s.chajang === chajang);
+    if (existingIdx >= 0) site.monthlyChajangStats[existingIdx] = entry;
+    else site.monthlyChajangStats.push(entry);
+    added++;
+  }
+
+  if (!added) { alert("인식된 담당자 행이 없습니다. 시트 구조를 확인해주세요."); return; }
+
+  persist();
+  const state = contactStateFor(site.id);
+  state.selectedStatMonth = monthKey;
+  renderMonthlyStatSection(site);
+  alert(`${monthKey} 기준, ${added}명의 담당자 집계를 불러왔습니다.`);
+}
+
+/* ---------- 집계 + 차트 (개별 접촉 기록 기준) ---------- */
 function buildRangeKeys(dates, mode) {
   const keys = [...new Set(dates.filter(Boolean).map(d => groupKeyOf(d, mode)))].sort();
   return keys.length ? keys : [groupKeyOf(new Date().toISOString().slice(0, 10), mode)];
@@ -362,8 +513,9 @@ function buildMonthRange(dates) {
 
 function rebuildContactCharts(site) {
   if (typeof Chart === "undefined") return;
-  destroyContactCharts(site.id);
-  const charts = {};
+  const siteCharts = _contactCharts[site.id] || {};
+  ["contact", "stance", "sentiment", "intimacy", "event"].forEach(k => { if (siteCharts[k]) siteCharts[k].destroy(); });
+  const charts = { monthly: siteCharts.monthly };
   const contacts = selectedContacts(site);
   const state = contactStateFor(site.id);
 
@@ -516,6 +668,21 @@ function rebuildContactCharts(site) {
 function bindContactTabEvents(site) {
   document.getElementById("ctPrintA4")?.addEventListener("click", () => printContactTab("A4"));
   document.getElementById("ctPrintA3")?.addEventListener("click", () => printContactTab("A3"));
+
+  document.getElementById("ctStatExcelUpload")?.addEventListener("click", () => {
+    document.getElementById("ctStatExcelFile").click();
+  });
+  document.getElementById("ctStatExcelFile")?.addEventListener("change", e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = evt => {
+      try { importMonthlyStatExcel(site, evt.target.result); }
+      catch (err) { alert("엑셀 파일을 읽는 중 문제가 발생했습니다: " + err.message); }
+    };
+    reader.readAsBinaryString(file);
+    e.target.value = "";
+  });
 
   document.getElementById("ctAddCompany")?.addEventListener("click", () => {
     const name = prompt("추가할 시공사 이름을 입력하세요.");
