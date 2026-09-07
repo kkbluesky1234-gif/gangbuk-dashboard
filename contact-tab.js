@@ -50,7 +50,7 @@ function groupLabel(key, mode) {
 }
 
 function contactStateFor(siteId) {
-  if (!_contactState[siteId]) _contactState[siteId] = { selectedChajang: null, period: "month", selectedStatMonth: null };
+  if (!_contactState[siteId]) _contactState[siteId] = { selectedChajang: null, period: "month", selectedStatMonth: null, selectedWeeklyMonth: null };
   return _contactState[siteId];
 }
 
@@ -138,7 +138,33 @@ function renderContactTab(site) {
     </div>
 
     <div class="detail-card">
-      <div class="detail-card-head"><h4>차장 선택 (아래 개별 접촉기록 기준)</h4></div>
+      <div class="detail-card-head">
+        <h4>인원별 주차별 접촉 현황</h4>
+        <select id="ctWeeklyMonthSelect" style="border:1px solid var(--slate-300);border-radius:6px;padding:5px 8px;font-size:12px"></select>
+      </div>
+      <div id="ctWeeklyMetrics" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px"></div>
+      <div style="overflow-x:auto;margin-bottom:14px">
+        <table style="width:100%;border-collapse:collapse;font-size:12px" id="ctWeeklyTable">
+          <thead><tr id="ctWeeklyHeadRow" style="border-bottom:1px solid var(--slate-300)"></tr></thead>
+          <tbody id="ctWeeklyBody"></tbody>
+        </table>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+        <div>
+          <div class="hint" style="margin-bottom:6px">이 달 주차별 총 접촉 건수</div>
+          <div style="position:relative;height:180px"><canvas id="ctWeeklyChart"></canvas></div>
+        </div>
+        <div>
+          <div class="hint" style="margin-bottom:6px">월별 총 접촉 건수 추이</div>
+          <div style="position:relative;height:180px"><canvas id="ctMonthlyTrendChart"></canvas></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="detail-card">
+      <div class="detail-card-head">
+        <h4>차장 선택 (아래 개별 접촉기록 기준)</h4>
+      </div>
       <div id="ctChajangPills" style="display:flex;gap:6px;flex-wrap:wrap"></div>
     </div>
 
@@ -238,6 +264,7 @@ function renderContactTab(site) {
   renderContactTable(site);
   renderEventTable(site);
   renderMonthlyStatSection(site);
+  renderWeeklyPersonSection(site);
   rebuildContactCharts(site);
   bindContactTabEvents(site);
 }
@@ -457,6 +484,117 @@ function rebuildMonthlyStatChart(site) {
 
   if (!_contactCharts[site.id]) _contactCharts[site.id] = {};
   _contactCharts[site.id].monthly = chart;
+}
+
+/* =========================================================
+   인원별 주차별/월별 접촉 현황 (개별 접촉기록 site.contacts 기준으로
+   자동 집계 — 별도 엑셀 업로드 없이 "전체 명부 엑셀 업로드"로 들어온
+   데이터에서 바로 계산됩니다)
+   ========================================================= */
+function weekOfMonthNum(dateStr) {
+  const day = Number(dateStr.slice(8, 10));
+  return Math.min(5, Math.ceil(day / 7));
+}
+function roleLabel(c) {
+  if (c.type === "임대의원") return c.role ? c.role : "임대의원";
+  return "조합원";
+}
+
+function renderWeeklyPersonSection(site) {
+  const monthSel = document.getElementById("ctWeeklyMonthSelect");
+  if (!monthSel) return;
+
+  const months = [...new Set(site.contacts.map(c => monthKeyOf(c.date)).filter(Boolean))].sort();
+  const state = contactStateFor(site.id);
+  if (!state.selectedWeeklyMonth || !months.includes(state.selectedWeeklyMonth)) {
+    state.selectedWeeklyMonth = months.length ? months[months.length - 1] : null;
+  }
+  monthSel.innerHTML = months.length
+    ? months.map(m => `<option value="${m}" ${m === state.selectedWeeklyMonth ? "selected" : ""}>${m}</option>`).join("")
+    : `<option value="">데이터 없음</option>`;
+  monthSel.onchange = () => { state.selectedWeeklyMonth = monthSel.value; renderWeeklyPersonSection(site); };
+
+  const monthContacts = site.contacts.filter(c => monthKeyOf(c.date) === state.selectedWeeklyMonth);
+
+  // 사람별로 묶기
+  const byName = {};
+  monthContacts.forEach(c => {
+    if (!c.name) return;
+    (byName[c.name] = byName[c.name] || { chajang: c.chajang, type: c.type, role: c.role, weeks: {}, total: 0 });
+    const wk = weekOfMonthNum(c.date);
+    byName[c.name].weeks[wk] = (byName[c.name].weeks[wk] || 0) + 1;
+    byName[c.name].total += 1;
+    byName[c.name].chajang = c.chajang || byName[c.name].chajang;
+  });
+  const people = Object.entries(byName).map(([name, d]) => ({ name, ...d }));
+  people.sort((a, b) => (a.chajang || "").localeCompare(b.chajang || "") || a.name.localeCompare(b.name));
+
+  // 요약 카드
+  const totalPeople = people.length;
+  const totalCount = people.reduce((s, p) => s + p.total, 0);
+  const leaseCount = people.filter(p => p.type === "임대의원").length;
+  document.getElementById("ctWeeklyMetrics").innerHTML = `
+    <div style="background:var(--paper);border-radius:8px;padding:10px 12px">
+      <div style="font-size:11.5px;color:var(--slate-500)">이 달 접촉 인원</div>
+      <div style="font-size:20px;font-weight:800">${totalPeople}명</div>
+    </div>
+    <div style="background:var(--paper);border-radius:8px;padding:10px 12px">
+      <div style="font-size:11.5px;color:var(--slate-500)">임대의원 / 조합원</div>
+      <div style="font-size:20px;font-weight:800">${leaseCount} / ${totalPeople - leaseCount}</div>
+    </div>
+    <div style="background:var(--paper);border-radius:8px;padding:10px 12px">
+      <div style="font-size:11.5px;color:var(--slate-500)">총 접촉 건수</div>
+      <div style="font-size:20px;font-weight:800;color:var(--accent)">${totalCount}건</div>
+    </div>`;
+
+  // 표: 이름 / 담당 / 구분 / 1주~5주 / 합계
+  const headRow = document.getElementById("ctWeeklyHeadRow");
+  headRow.innerHTML = `
+    <th style="text-align:left;padding:5px 4px;color:var(--slate-500)">이름</th>
+    <th style="text-align:left;padding:5px 4px;color:var(--slate-500)">담당</th>
+    <th style="text-align:left;padding:5px 4px;color:var(--slate-500)">구분</th>
+    ${[1, 2, 3, 4, 5].map(w => `<th style="text-align:right;padding:5px 4px;color:var(--slate-500)">${w}주</th>`).join("")}
+    <th style="text-align:right;padding:5px 4px;color:var(--slate-500);font-weight:700">합계</th>`;
+
+  const body = document.getElementById("ctWeeklyBody");
+  body.innerHTML = people.map(p => `
+    <tr style="border-bottom:1px solid var(--slate-100)">
+      <td style="padding:4px">${esc(p.name)}</td>
+      <td style="padding:4px">${esc(p.chajang || "-")}</td>
+      <td style="padding:4px">${esc(roleLabel(p))}</td>
+      ${[1, 2, 3, 4, 5].map(w => `<td style="text-align:right;padding:4px">${p.weeks[w] ? fmtNum(p.weeks[w]) : "-"}</td>`).join("")}
+      <td style="text-align:right;padding:4px;font-weight:700">${fmtNum(p.total)}</td>
+    </tr>`).join("") || `<tr><td colspan="9" style="padding:14px 4px;color:var(--slate-500)">이 달 접촉 기록이 없습니다.</td></tr>`;
+
+  rebuildWeeklyCharts(site, people, months);
+}
+
+function rebuildWeeklyCharts(site, people, months) {
+  if (typeof Chart === "undefined") return;
+  const key = site.id;
+  if (!_contactCharts[key]) _contactCharts[key] = {};
+  if (_contactCharts[key].weekly) _contactCharts[key].weekly.destroy();
+  if (_contactCharts[key].monthlyTrend) _contactCharts[key].monthlyTrend.destroy();
+
+  const weekTotals = [1, 2, 3, 4, 5].map(w => people.reduce((s, p) => s + (p.weeks[w] || 0), 0));
+  _contactCharts[key].weekly = new Chart(document.getElementById("ctWeeklyChart"), {
+    type: "bar",
+    data: {
+      labels: ["1주", "2주", "3주", "4주", "5주"],
+      datasets: [{ label: "접촉 건수", data: weekTotals, backgroundColor: "#378add", borderRadius: 4 }]
+    },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+  });
+
+  const monthlyTotals = months.map(m => site.contacts.filter(c => monthKeyOf(c.date) === m).length);
+  _contactCharts[key].monthlyTrend = new Chart(document.getElementById("ctMonthlyTrendChart"), {
+    type: "line",
+    data: {
+      labels: months,
+      datasets: [{ label: "총 접촉 건수", data: monthlyTotals, borderColor: "#1d9e75", backgroundColor: "rgba(29,158,117,0.12)", fill: true, tension: 0.3, borderWidth: 2, pointRadius: 3 }]
+    },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+  });
 }
 
 function numAt(row, idx) {
@@ -927,7 +1065,7 @@ function importMasterRegistryExcel(site, binary) {
       const key = `${name}__${dateStr}`;
       if (existingKeys.has(key)) return;
       existingKeys.add(key);
-      site.contacts.push({ id: uid(), date: dateStr, chajang: dept, name, type, stance, level });
+      site.contacts.push({ id: uid(), date: dateStr, chajang: dept, name, type, role, stance, level });
       added++;
       personHasContact = true;
     });
