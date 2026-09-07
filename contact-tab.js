@@ -98,14 +98,23 @@ function renderContactTab(site) {
 
     <div class="detail-card">
       <div class="detail-card-head">
-        <h4>월별 담당자 접촉현황 집계</h4>
+        <h4>📁 전체 명부 엑셀 업로드 (통합 — 추천)</h4>
+      </div>
+      <p class="hint" style="margin-bottom:10px">기존에 쓰시던 명부 엑셀 파일(이름/담당/임대의원/날짜별 접촉/시공사성향/친밀도 열이 있는 그 파일)을 그대로 올리면, 아래 모든 그래프(개별 접촉인원 추이·시공사 지지분포·성향 변화·친밀도 변화)가 한 번에 채워집니다. 여러 번 올려도 이미 반영된 날짜는 건너뛰고 새 내용만 추가돼요.</p>
+      <input type="file" id="ctMasterExcelFile" accept=".xlsx,.xls" class="hidden">
+      <button id="ctMasterExcelUpload" class="btn btn-primary btn-sm admin-only">📁 전체 명부 엑셀 업로드</button>
+    </div>
+
+    <div class="detail-card">
+      <div class="detail-card-head">
+        <h4>월별 담당자 접촉현황 집계 (선택 — 상담/단순/TM 요약표만 필요할 때)</h4>
         <div style="display:flex;gap:6px;align-items:center">
           <select id="ctStatMonthSelect" style="border:1px solid var(--slate-300);border-radius:6px;padding:5px 8px;font-size:12px"></select>
           <input type="file" id="ctStatExcelFile" accept=".xlsx,.xls" class="hidden">
           <button id="ctStatExcelUpload" class="btn btn-outline btn-sm admin-only">📊 담당별 집계 엑셀 업로드</button>
         </div>
       </div>
-      <p class="hint" style="margin-bottom:10px">기존에 쓰시는 "OO집계" 시트가 있는 엑셀 파일을 그대로 업로드하세요 (담당/인원/상담/단순/TM/거부/부재/불명/미접촉 열이 있는 표).</p>
+      <p class="hint" style="margin-bottom:10px">"OO집계" 시트가 있는 파일을 올리면 상담/단순/TM 요약표만 따로 볼 수 있어요 (위의 "전체 명부 업로드"와는 별개 기능입니다).</p>
       <div style="position:relative;height:220px;margin-bottom:14px"><canvas id="ctMonthlyStatChart"></canvas></div>
       <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse;font-size:12px">
@@ -672,6 +681,21 @@ function bindContactTabEvents(site) {
   document.getElementById("ctPrintA4")?.addEventListener("click", () => printContactTab("A4"));
   document.getElementById("ctPrintA3")?.addEventListener("click", () => printContactTab("A3"));
 
+  document.getElementById("ctMasterExcelUpload")?.addEventListener("click", () => {
+    document.getElementById("ctMasterExcelFile").click();
+  });
+  document.getElementById("ctMasterExcelFile")?.addEventListener("change", e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = evt => {
+      try { importMasterRegistryExcel(site, evt.target.result); }
+      catch (err) { alert("엑셀 파일을 읽는 중 문제가 발생했습니다: " + err.message); }
+    };
+    reader.readAsBinaryString(file);
+    e.target.value = "";
+  });
+
   document.getElementById("ctStatExcelUpload")?.addEventListener("click", () => {
     document.getElementById("ctStatExcelFile").click();
   });
@@ -798,4 +822,126 @@ function importContactExcel(site, binary) {
   renderEventTable(site);
   rebuildContactCharts(site);
   alert(`명단 ${addedContacts}건 추가 / ${updatedContacts}건 갱신, 행사 ${addedEvents}건 추가되었습니다.`);
+}
+
+/* =========================================================
+   전체 명부 엑셀(마스터 시트) 통합 업로드
+   "성 명", "담당", "임대\n의원", 날짜별 칸, "시공사성향", "친밀도"
+   헤더가 들어있는 시트를 자동으로 찾아서, 한 번에
+   개별 접촉기록(site.contacts)으로 변환해 모든 그래프에 반영합니다.
+   ========================================================= */
+function cleanHeader(v) {
+  return String(v ?? "").replace(/[\s\n\r]/g, "");
+}
+function findColByHeader(headerRows, predicate) {
+  for (const row of headerRows) {
+    if (!row) continue;
+    for (let c = 0; c < row.length; c++) {
+      if (predicate(cleanHeader(row[c]))) return c;
+    }
+  }
+  return -1;
+}
+function findColExact(headerRows, text) {
+  return findColByHeader(headerRows, v => v === text);
+}
+function pad2(n) { return String(n).padStart(2, "0"); }
+function formatDateLocal(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function importMasterRegistryExcel(site, binary) {
+  const wb = XLSX.read(binary, { type: "binary", cellDates: true });
+
+  // "시공사성향"과 "친밀도" 헤더가 둘 다 있는 시트를 자동으로 찾음
+  let targetSheet = null, rows = null;
+  for (const name of wb.SheetNames) {
+    const r = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: "", raw: true });
+    const flat = r.slice(0, 6).map(row => row.map(cleanHeader).join("|")).join("|");
+    if (flat.includes("시공사성향") && flat.includes("친밀도")) { targetSheet = name; rows = r; break; }
+  }
+  if (!rows) { alert('"시공사성향", "친밀도" 항목이 있는 시트를 찾지 못했습니다. 파일 구조를 확인해주세요.'); return; }
+
+  const headerRows = [rows[0], rows[1], rows[2], rows[3]];
+
+  const nameCol = findColByHeader(headerRows, v => v.includes("성명"));
+  const noCol = findColExact(headerRows, "No");
+  const unionCheckCol = noCol >= 0 ? noCol + 1 : -1;
+  const deptCol = findColExact(headerRows, "담당");
+  const roleCol = findColByHeader(headerRows, v => v.includes("임대의원"));
+  const stanceStart = findColExact(headerRows, "시공사성향");
+  const intimacyStart = findColExact(headerRows, "친밀도");
+  const surveyStart = findColExact(headerRows, "설문조사");
+
+  if ([nameCol, deptCol, roleCol, stanceStart, intimacyStart, unionCheckCol].some(v => v < 0)) {
+    alert("필요한 열(No/성명/담당/임대의원/시공사성향/친밀도)을 모두 찾지 못했습니다. 시트 구조가 다른 것 같습니다.");
+    return;
+  }
+  const intimacyEnd = surveyStart > intimacyStart ? surveyStart : intimacyStart + 3;
+
+  // 날짜 칸: 헤더 행(1~4행) 어딘가에 실제 날짜(Date)가 들어있는 열들을 전부 수집
+  let dateCols = [];
+  for (const row of headerRows) {
+    if (!row) continue;
+    row.forEach((v, c) => { if (v instanceof Date) dateCols.push(c); });
+    if (dateCols.length) break;
+  }
+  dateCols = [...new Set(dateCols)].sort((a, b) => a - b);
+  if (!dateCols.length) { alert("날짜별 접촉 칸을 찾지 못했습니다."); return; }
+  const dateHeaderRowIdx = headerRows.findIndex(row => row && row[dateCols[0]] instanceof Date);
+  const dateHeaderRow = headerRows[dateHeaderRowIdx];
+
+  const stanceLabelRow = headerRows[headerRows.findIndex(r => r && r[stanceStart + 1])] || headerRows[3] || [];
+  const intimacyLabelRow = stanceLabelRow;
+
+  const existingKeys = new Set(site.contacts.map(c => `${c.name}__${c.date}`));
+  let added = 0, peopleTouched = new Set();
+
+  for (let r = 4; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row) continue;
+    if (!row[unionCheckCol]) continue; // 체크(1) 안 된 중복/부가 행은 건너뜀
+    const name = String(row[nameCol] ?? "").trim();
+    if (!name) continue;
+
+    const dept = String(row[deptCol] ?? "").trim();
+    const role = String(row[roleCol] ?? "").trim();
+    const type = role ? "임대의원" : "조합원";
+
+    let stance = "미정";
+    for (let c = stanceStart + 1; c < intimacyStart; c++) {
+      if (row[c]) { stance = String(stanceLabelRow[c] ?? "").trim() || "미정"; break; }
+    }
+    let level = "하";
+    for (let c = intimacyStart + 1; c < intimacyEnd; c++) {
+      if (row[c]) { level = String(intimacyLabelRow[c] ?? "").trim() || "하"; break; }
+    }
+
+    let personHasContact = false;
+    dateCols.forEach(c => {
+      const v = row[c];
+      if (!v) return;
+      const dateVal = dateHeaderRow[c];
+      if (!(dateVal instanceof Date)) return;
+      const dateStr = formatDateLocal(dateVal);
+      const key = `${name}__${dateStr}`;
+      if (existingKeys.has(key)) return;
+      existingKeys.add(key);
+      site.contacts.push({ id: uid(), date: dateStr, chajang: dept, name, type, stance, level });
+      added++;
+      personHasContact = true;
+    });
+    if (personHasContact) peopleTouched.add(name);
+
+    if (stance !== "미정" && !site.companies.includes(stance)) site.companies.push(stance);
+  }
+
+  if (!added) { alert("새로 추가할 접촉 기록이 없습니다 (이미 반영된 데이터일 수 있어요)."); return; }
+
+  persist();
+  renderChajangPills(site);
+  renderCompanyTags(site);
+  renderContactTable(site);
+  rebuildContactCharts(site);
+  alert(`"${targetSheet}" 시트에서 ${peopleTouched.size}명, 총 ${added}건의 접촉 기록을 새로 불러왔습니다.`);
 }
