@@ -89,8 +89,7 @@
   @page { size: A4 landscape; margin: 7mm; }
   * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
 
-  /* ---- 접촉현황 탭 인쇄 (새 기능: "A4로 인쇄"/"A3로 인쇄" 버튼) ---- */
-  /* body에 접촉현황용 페이지 크기가 JS로 주입되므로, 여기서는 레이아웃만 강제합니다. */
+    /* ---- 접촉현황 탭 인쇄 (새 기능: "A4로 인쇄"/"A3로 인쇄" 버튼) ---- */
   body.printing-contact > *:not(#mainArea) { display: none !important; }
   body.printing-contact #mainArea { display: block !important; height: auto !important; }
   body.printing-contact #siteListPanel,
