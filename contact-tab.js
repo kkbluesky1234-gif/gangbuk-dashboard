@@ -14,9 +14,10 @@ const CONTACT_LEVEL_RANK = { "상": 2, "중": 1, "하": 0 };
 const CONTACT_TYPES = ["임대의원", "조합원"];
 const DEFAULT_EVENT_TYPES = ["투어", "간담회", "설문조사"];
 const EVENT_COLORS = ["#378add", "#d85a30", "#1d9e75", "#8b5cf6", "#f59e0b"];
+const PERIOD_MODES = [["day", "일별"], ["week", "주별"], ["month", "월별"]];
 
 const _contactCharts = {}; // siteId -> { contact, stance, sentiment, intimacy, event }
-const _contactState = {}; // siteId -> { selectedChajang: Set }
+const _contactState = {}; // siteId -> { selectedChajang: Set, period: "day"|"week"|"month" }
 
 function ensureContactData(site) {
   site.contacts = site.contacts || [];
@@ -27,9 +28,26 @@ function ensureContactData(site) {
 function monthKeyOf(dateStr) {
   return (dateStr || "").slice(0, 7);
 }
+function weekKeyOf(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(dateStr + "T00:00:00");
+  const day = (d.getDay() + 6) % 7; // 월요일 시작
+  d.setDate(d.getDate() - day);
+  return d.toISOString().slice(0, 10);
+}
+function groupKeyOf(dateStr, mode) {
+  if (mode === "day") return dateStr || "";
+  if (mode === "week") return weekKeyOf(dateStr);
+  return monthKeyOf(dateStr);
+}
+function groupLabel(key, mode) {
+  if (mode === "week") return key.slice(5).replace("-", "/") + "주~";
+  if (mode === "day") return key.slice(5).replace("-", "/");
+  return key;
+}
 
 function contactStateFor(siteId) {
-  if (!_contactState[siteId]) _contactState[siteId] = { selectedChajang: null };
+  if (!_contactState[siteId]) _contactState[siteId] = { selectedChajang: null, period: "month" };
   return _contactState[siteId];
 }
 
@@ -62,8 +80,11 @@ function renderContactTab(site) {
     </div>
 
     <div class="detail-card">
-      <div class="detail-card-head"><h4>월별 접촉 인원</h4></div>
-      <div style="position:relative;height:200px"><canvas id="ctContactChart"></canvas></div>
+      <div class="detail-card-head">
+        <h4>접촉 인원 추이</h4>
+        <div id="ctPeriodPills" style="display:flex;gap:6px"></div>
+      </div>
+      <div style="position:relative;height:220px"><canvas id="ctContactChart"></canvas></div>
     </div>
 
     <div class="detail-card">
@@ -72,7 +93,7 @@ function renderContactTab(site) {
     </div>
 
     <div class="detail-card">
-      <div class="detail-card-head"><h4>시공사 지지 성향 변화 추이</h4></div>
+      <div class="detail-card-head"><h4>시공사 지지 성향 변화 추이 (월별)</h4></div>
       <div style="position:relative;height:210px"><canvas id="ctSentimentChart"></canvas></div>
     </div>
 
@@ -144,6 +165,7 @@ function renderContactTab(site) {
   `;
 
   renderChajangPills(site);
+  renderPeriodPills(site);
   renderCompanyTags(site);
   renderContactTable(site);
   renderEventTable(site);
@@ -174,6 +196,22 @@ function renderChajangPills(site) {
       renderChajangPills(site);
       rebuildContactCharts(site);
       renderContactTable(site);
+    });
+  });
+}
+
+/* ---------- 기간 단위(일/주/월) 필터 ---------- */
+function renderPeriodPills(site) {
+  const box = document.getElementById("ctPeriodPills");
+  const state = contactStateFor(site.id);
+  box.innerHTML = PERIOD_MODES.map(([val, label]) =>
+    `<button class="btn ${state.period === val ? "btn-primary" : "btn-outline"} btn-sm ct-period" data-val="${val}">${label}</button>`
+  ).join("");
+  box.querySelectorAll(".ct-period").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.period = btn.dataset.val;
+      renderPeriodPills(site);
+      rebuildContactCharts(site);
     });
   });
 }
@@ -293,9 +331,12 @@ function renderEventTable(site) {
 }
 
 /* ---------- 집계 + 차트 ---------- */
+function buildRangeKeys(dates, mode) {
+  const keys = [...new Set(dates.filter(Boolean).map(d => groupKeyOf(d, mode)))].sort();
+  return keys.length ? keys : [groupKeyOf(new Date().toISOString().slice(0, 10), mode)];
+}
 function buildMonthRange(dates) {
-  const keys = [...new Set(dates.filter(Boolean).map(monthKeyOf))].sort();
-  return keys.length ? keys : [new Date().toISOString().slice(0, 7)];
+  return buildRangeKeys(dates, "month");
 }
 
 function rebuildContactCharts(site) {
@@ -303,6 +344,7 @@ function rebuildContactCharts(site) {
   destroyContactCharts(site.id);
   const charts = {};
   const contacts = selectedContacts(site);
+  const state = contactStateFor(site.id);
 
   // 요약 카드
   const metricsBox = document.getElementById("ctMetrics");
@@ -336,21 +378,21 @@ function rebuildContactCharts(site) {
       <div style="font-size:20px;font-weight:800">${totalEvents}명</div>
     </div>`;
 
-  // 월별 접촉 인원 (구분별)
-  const contactMonths = buildMonthRange(contacts.map(c => c.date));
-  const rentData = contactMonths.map(m => contacts.filter(c => c.type === "임대의원" && monthKeyOf(c.date) === m).length);
-  const unionData = contactMonths.map(m => contacts.filter(c => c.type === "조합원" && monthKeyOf(c.date) === m).length);
+  // 접촉 인원 추이 (일/주/월 선택 가능)
+  const rangeKeys = buildRangeKeys(contacts.map(c => c.date), state.period);
+  const rentData = rangeKeys.map(k => contacts.filter(c => c.type === "임대의원" && groupKeyOf(c.date, state.period) === k).length);
+  const unionData = rangeKeys.map(k => contacts.filter(c => c.type === "조합원" && groupKeyOf(c.date, state.period) === k).length);
 
   charts.contact = new Chart(document.getElementById("ctContactChart"), {
     type: "bar",
     data: {
-      labels: contactMonths,
+      labels: rangeKeys.map(k => groupLabel(k, state.period)),
       datasets: [
         { label: "임대의원", data: rentData, backgroundColor: "#378add", borderRadius: 4 },
         { label: "조합원", data: unionData, backgroundColor: "#d85a30", borderRadius: 4 }
       ]
     },
-    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
   });
 
   // 현재 시공사 지지 분포 (인원별 최신 기록 기준)
@@ -370,7 +412,8 @@ function rebuildContactCharts(site) {
     options: { responsive: true, maintainAspectRatio: false, cutout: "60%" }
   });
 
-  // 성향 변화 추이 (월별 비중)
+  // 성향 변화 추이 (월별 비중 — 큰 흐름을 보는 용도라 항상 월 단위)
+  const contactMonths = buildMonthRange(contacts.map(c => c.date));
   charts.sentiment = new Chart(document.getElementById("ctSentimentChart"), {
     type: "line",
     data: {
