@@ -1337,6 +1337,7 @@ function renderSiteDetail() {
       <button class="dtab" data-tab="progress">추진경과</button>
       <button class="dtab" data-tab="journal">일지 <span class="dtab-count dtab-journal-count">0</span></button>
       <button class="dtab" data-tab="notice">공고</button>
+      <button class="dtab" data-tab="contact">접촉현황</button>
     </div>
 
     <div class="dtab-panel" data-panel="overview">
@@ -1407,8 +1408,9 @@ function renderSiteDetail() {
         </div>
       </div>
     </div>
-  `;
 
+    <div class="dtab-panel hidden" data-panel="contact"></div>
+  `;
   renderSalesPanel(site);
   renderProgressPanel(site);
   renderJournalPanel(site);
@@ -1426,6 +1428,7 @@ function renderSiteDetail() {
       panel.querySelectorAll(".dtab-panel").forEach(p => p.classList.add("hidden"));
       tabBtn.classList.add("active");
       panel.querySelector(`[data-panel="${tabBtn.dataset.tab}"]`).classList.remove("hidden");
+      if (tabBtn.dataset.tab === "contact") renderContactTab(site);
     });
   });
 
