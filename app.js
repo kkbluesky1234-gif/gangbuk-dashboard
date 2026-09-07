@@ -2102,6 +2102,8 @@ function printSiteCard(site) {
     box.style.left = "";
     box.style.top = "";
     box.style.display = "";
+    const ctStyleTag = document.getElementById("ctPrintPageSize");
+    if (ctStyleTag) ctStyleTag.textContent = "";
     window.print();
   };
 
