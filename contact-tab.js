@@ -14,6 +14,8 @@
 const CONTACT_LEVELS = ["상", "중", "하"];
 const CONTACT_LEVEL_RANK = { "상": 2, "중": 1, "하": 0 };
 const CONTACT_TYPES = ["임대의원", "조합원"];
+const ROLE_OPTIONS = ["", "조합장", "감사", "이사", "대의원"];
+const CONTACT_METHODS = ["", "상담", "단순상담", "TM", "거부", "부재", "불명"];
 const DEFAULT_EVENT_TYPES = ["투어", "간담회", "설문조사"];
 const EVENT_COLORS = ["#378add", "#d85a30", "#1d9e75", "#8b5cf6", "#f59e0b"];
 const PERIOD_MODES = [["day", "일별"], ["week", "주별"], ["month", "월별"]];
@@ -182,6 +184,11 @@ function renderContactTab(site) {
     </div>
 
     <div class="detail-card">
+      <div class="detail-card-head"><h4>접촉방법 통계 (상담/단순상담/TM 등)</h4></div>
+      <div style="position:relative;height:200px"><canvas id="ctMethodChart"></canvas></div>
+    </div>
+
+    <div class="detail-card">
       <div class="detail-card-head"><h4>시공사 지지 성향 변화 추이 (월별)</h4></div>
       <div style="position:relative;height:210px"><canvas id="ctSentimentChart"></canvas></div>
     </div>
@@ -218,8 +225,11 @@ function renderContactTab(site) {
               <th style="text-align:left;padding:6px 4px;color:var(--slate-500)">이름</th>
               <th style="text-align:left;padding:6px 4px;color:var(--slate-500)">담당 차장</th>
               <th style="text-align:left;padding:6px 4px;color:var(--slate-500)">구분</th>
+              <th style="text-align:left;padding:6px 4px;color:var(--slate-500)">직책</th>
+              <th style="text-align:left;padding:6px 4px;color:var(--slate-500)">접촉방법</th>
               <th style="text-align:left;padding:6px 4px;color:var(--slate-500)">성향</th>
               <th style="text-align:left;padding:6px 4px;color:var(--slate-500)">친밀도</th>
+              <th style="text-align:left;padding:6px 4px;color:var(--slate-500)">특이사항</th>
               <th style="width:24px"></th>
             </tr>
           </thead>
@@ -352,25 +362,35 @@ function renderContactTable(site) {
       <td style="padding:5px 4px"><select class="ct-type" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 4px;font-size:12px">
         ${CONTACT_TYPES.map(t => `<option ${t === c.type ? "selected" : ""}>${t}</option>`).join("")}
       </select></td>
+      <td style="padding:5px 4px"><select class="ct-role" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 4px;font-size:12px">
+        ${ROLE_OPTIONS.map(r => `<option value="${esc(r)}" ${r === (c.role || "") ? "selected" : ""}>${r || "-"}</option>`).join("")}
+      </select></td>
+      <td style="padding:5px 4px"><select class="ct-method" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 4px;font-size:12px">
+        ${CONTACT_METHODS.map(m => `<option value="${esc(m)}" ${m === (c.method || "") ? "selected" : ""}>${m || "-"}</option>`).join("")}
+      </select></td>
       <td style="padding:5px 4px"><select class="ct-stance" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 4px;font-size:12px">
         ${stanceOptionsHtml(site, c.stance)}
       </select></td>
       <td style="padding:5px 4px"><select class="ct-level" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 4px;font-size:12px">
         ${CONTACT_LEVELS.map(l => `<option ${l === c.level ? "selected" : ""}>${l}</option>`).join("")}
       </select></td>
+      <td style="padding:5px 4px"><input type="text" class="ct-note" value="${esc(c.note || "")}" placeholder="특이사항" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 5px;font-size:12px;width:100px"></td>
       <td style="padding:5px 4px"><button class="ct-del admin-only" style="border:none;background:none;color:var(--slate-300);cursor:pointer">✕</button></td>
-    </tr>`).join("") || `<tr><td colspan="7" style="padding:14px 4px;color:var(--slate-500)">표시할 접촉 기록이 없습니다.</td></tr>`;
+    </tr>`).join("") || `<tr><td colspan="10" style="padding:14px 4px;color:var(--slate-500)">표시할 접촉 기록이 없습니다.</td></tr>`;
 
   body.querySelectorAll("tr[data-id]").forEach(row => {
     const id = row.dataset.id;
     const contact = site.contacts.find(c => c.id === id);
     if (!contact) return;
-    row.querySelector(".ct-date").addEventListener("change", e => { contact.date = e.target.value; persist(); rebuildContactCharts(site); renderChajangPills(site); });
+    row.querySelector(".ct-date").addEventListener("change", e => { contact.date = e.target.value; persist(); rebuildContactCharts(site); renderChajangPills(site); renderWeeklyPersonSection(site); });
     row.querySelector(".ct-name").addEventListener("change", e => { contact.name = e.target.value.trim(); persist(); });
-    row.querySelector(".ct-chajang").addEventListener("change", e => { contact.chajang = e.target.value.trim(); persist(); renderChajangPills(site); rebuildContactCharts(site); });
-    row.querySelector(".ct-type").addEventListener("change", e => { contact.type = e.target.value; persist(); rebuildContactCharts(site); });
+    row.querySelector(".ct-chajang").addEventListener("change", e => { contact.chajang = e.target.value.trim(); persist(); renderChajangPills(site); rebuildContactCharts(site); renderWeeklyPersonSection(site); });
+    row.querySelector(".ct-type").addEventListener("change", e => { contact.type = e.target.value; persist(); rebuildContactCharts(site); renderWeeklyPersonSection(site); });
+    row.querySelector(".ct-role").addEventListener("change", e => { contact.role = e.target.value; persist(); renderWeeklyPersonSection(site); });
+    row.querySelector(".ct-method").addEventListener("change", e => { contact.method = e.target.value; persist(); rebuildContactCharts(site); });
     row.querySelector(".ct-stance").addEventListener("change", e => { contact.stance = e.target.value; persist(); rebuildContactCharts(site); });
     row.querySelector(".ct-level").addEventListener("change", e => { contact.level = e.target.value; persist(); rebuildContactCharts(site); });
+    row.querySelector(".ct-note").addEventListener("change", e => { contact.note = e.target.value; persist(); });
     row.querySelector(".ct-del").addEventListener("click", () => {
       if (!confirm("이 접촉 기록을 삭제하시겠습니까?")) return;
       site.contacts = site.contacts.filter(c => c.id !== id);
@@ -378,6 +398,7 @@ function renderContactTable(site) {
       renderChajangPills(site);
       renderContactTable(site);
       rebuildContactCharts(site);
+      renderWeeklyPersonSection(site);
     });
   });
 }
@@ -686,7 +707,7 @@ function buildMonthRange(dates) {
 function rebuildContactCharts(site) {
   if (typeof Chart === "undefined") return;
   const siteCharts = _contactCharts[site.id] || {};
-  ["contact", "stance", "sentiment", "intimacy", "event"].forEach(k => { if (siteCharts[k]) siteCharts[k].destroy(); });
+  ["contact", "stance", "method", "sentiment", "intimacy", "event"].forEach(k => { if (siteCharts[k]) siteCharts[k].destroy(); });
   const charts = { monthly: siteCharts.monthly };
   const contacts = selectedContacts(site);
   const state = contactStateFor(site.id);
@@ -752,6 +773,17 @@ function rebuildContactCharts(site) {
       datasets: [{ data: stanceCounts, backgroundColor: stanceLabels.map((_, i) => EVENT_COLORS[i % EVENT_COLORS.length]), borderColor: "#fff", borderWidth: 2 }]
     },
     options: { responsive: true, maintainAspectRatio: false, cutout: "60%" }
+  });
+
+  const methodLabels = CONTACT_METHODS.filter(Boolean);
+  const methodCounts = methodLabels.map(m => contacts.filter(c => c.method === m).length);
+  charts.method = new Chart(document.getElementById("ctMethodChart"), {
+    type: "bar",
+    data: {
+      labels: methodLabels,
+      datasets: [{ label: "건수", data: methodCounts, backgroundColor: "#8b5cf6", borderRadius: 4 }]
+    },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
   });
 
   const contactMonths = buildMonthRange(contacts.map(c => c.date));
@@ -902,7 +934,10 @@ function bindContactTabEvents(site) {
 
   document.getElementById("ctExcelTemplate")?.addEventListener("click", () => {
     const wb = XLSX.utils.book_new();
-    const ws1 = XLSX.utils.aoa_to_sheet([["날짜", "이름", "담당차장", "구분", "성향", "친밀도"]]);
+    const ws1 = XLSX.utils.aoa_to_sheet([[
+      "날짜", "이름", "생년월일", "담당차장", "구분", "직책", "연락처", "주소",
+      "접촉방법", "성향", "친밀도", "특이사항", "설문조사참여", "갤러리투어참여"
+    ]]);
     const ws2 = XLSX.utils.aoa_to_sheet([["날짜", "행사종류", "참여인원", "메모"]]);
     XLSX.utils.book_append_sheet(wb, ws1, "명단");
     XLSX.utils.book_append_sheet(wb, ws2, "행사이력");
@@ -941,10 +976,18 @@ function importContactExcel(site, binary) {
       const existing = site.contacts.find(c => c.name === name && c.date === date);
       const incoming = {
         date, name,
+        birthDate: String(row["생년월일"] || "").trim(),
         chajang: String(row["담당차장"] || "").trim(),
         type: CONTACT_TYPES.includes(row["구분"]) ? row["구분"] : "조합원",
+        role: String(row["직책"] || "").trim(),
+        phone: String(row["연락처"] || "").trim(),
+        address: String(row["주소"] || "").trim(),
+        method: String(row["접촉방법"] || "").trim(),
         stance: String(row["성향"] || "미정").trim(),
-        level: CONTACT_LEVELS.includes(row["친밀도"]) ? row["친밀도"] : "하"
+        level: CONTACT_LEVELS.includes(row["친밀도"]) ? row["친밀도"] : "하",
+        note: String(row["특이사항"] || "").trim(),
+        survey: String(row["설문조사참여"] || "").trim(),
+        galleryTour: String(row["갤러리투어참여"] || "").trim()
       };
       if (existing) {
         const ok = confirm(`"${name}" (${date}) 기록이 이미 있습니다.\n확인: 덮어쓰기 / 취소: 새 기록으로 추가`);
