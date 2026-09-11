@@ -297,6 +297,7 @@ function renderChajangPills(site) {
       renderChajangPills(site);
       rebuildContactCharts(site);
       renderContactTable(site);
+      renderWeeklyPersonSection(site);
     });
   });
 }
@@ -530,7 +531,7 @@ function renderWeeklyPersonSection(site) {
     : `<option value="">데이터 없음</option>`;
   monthSel.onchange = () => { state.selectedWeeklyMonth = monthSel.value; renderWeeklyPersonSection(site); };
 
-  const monthContacts = site.contacts.filter(c => monthKeyOf(c.date) === state.selectedWeeklyMonth);
+  const monthContacts = selectedContacts(site).filter(c => monthKeyOf(c.date) === state.selectedWeeklyMonth);
 
   // 사람별로 묶기
   const byName = {};
@@ -629,7 +630,7 @@ function rebuildWeeklyCharts(site, people, months) {
     options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
   });
 
-  const monthlyTotals = months.map(m => site.contacts.filter(c => monthKeyOf(c.date) === m).length);
+  const monthlyTotals = months.map(m => selectedContacts(site).filter(c => monthKeyOf(c.date) === m).length);
   _contactCharts[key].monthlyTrend = new Chart(document.getElementById("ctMonthlyTrendChart"), {
     type: "line",
     data: {
@@ -923,6 +924,7 @@ function bindContactTabEvents(site) {
     renderChajangPills(site);
     renderContactTable(site);
     rebuildContactCharts(site);
+    renderWeeklyPersonSection(site);
   });
 
   document.getElementById("ctAddEvent")?.addEventListener("click", () => {
@@ -1024,6 +1026,7 @@ function importContactExcel(site, binary) {
   renderContactTable(site);
   renderEventTable(site);
   rebuildContactCharts(site);
+  renderWeeklyPersonSection(site);
   alert(`명단 ${addedContacts}건 추가 / ${updatedContacts}건 갱신, 행사 ${addedEvents}건 추가되었습니다.`);
 }
 
@@ -1153,5 +1156,6 @@ function importMasterRegistryExcel(site, binary) {
   renderCompanyTags(site);
   renderContactTable(site);
   rebuildContactCharts(site);
+  renderWeeklyPersonSection(site);
   alert(`"${targetSheet}" 시트에서 ${peopleTouched.size}명, 총 ${added}건의 접촉 기록을 새로 불러왔습니다.`);
 }
