@@ -90,12 +90,17 @@ function renderContactTab(site) {
 
   const state = contactStateFor(site.id);
   const chajangList = [...new Set(site.contacts.map(c => c.chajang).filter(Boolean))].sort();
-  if (state.selectedChajang === null) state.selectedChajang = new Set(chajangList);
+  if (state.selectedChajang === null) state.selectedChajang = new Set();
 
   panel.innerHTML = `
     <div class="detail-card" style="display:flex;justify-content:flex-end;gap:6px">
       <button id="ctPrintA4" class="btn btn-outline btn-sm">🖨 A4로 인쇄</button>
       <button id="ctPrintA3" class="btn btn-outline btn-sm">🖨 A3로 인쇄</button>
+    </div>
+
+    <div class="detail-card">
+      <div class="detail-card-head"><h4>차장 선택 (아래 모든 표·그래프가 이 선택 기준으로 바뀝니다)</h4></div>
+      <div id="ctChajangPills" style="display:flex;gap:6px;flex-wrap:wrap"></div>
     </div>
 
     <div class="detail-card">
@@ -156,13 +161,6 @@ function renderContactTab(site) {
           <div style="position:relative;height:180px"><canvas id="ctMonthlyTrendChart"></canvas></div>
         </div>
       </div>
-    </div>
-
-    <div class="detail-card">
-      <div class="detail-card-head">
-        <h4>차장 선택 (아래 개별 접촉기록 기준)</h4>
-      </div>
-      <div id="ctChajangPills" style="display:flex;gap:6px;flex-wrap:wrap"></div>
     </div>
 
     <div class="detail-card">
@@ -284,16 +282,19 @@ function renderChajangPills(site) {
     box.innerHTML = `<p class="hint">등록된 개별 접촉 기록이 없습니다. 아래에서 추가해보세요.</p>`;
     return;
   }
-  box.innerHTML = chajangList.map(name => {
-    const on = state.selectedChajang.has(name);
-    return `<button class="btn ${on ? "btn-primary" : "btn-outline"} btn-sm ct-pill" data-name="${esc(name)}">${esc(name)}</button>`;
-  }).join("");
+  const allActive = state.selectedChajang.size === 0;
+  box.innerHTML =
+    `<button class="btn ${allActive ? "btn-primary" : "btn-outline"} btn-sm ct-pill" data-name="">전체</button>` +
+    chajangList.map(name => {
+      const on = state.selectedChajang.has(name);
+      return `<button class="btn ${on ? "btn-primary" : "btn-outline"} btn-sm ct-pill" data-name="${esc(name)}">${esc(name)}</button>`;
+    }).join("");
 
   box.querySelectorAll(".ct-pill").forEach(btn => {
     btn.addEventListener("click", () => {
       const name = btn.dataset.name;
-      if (state.selectedChajang.has(name)) state.selectedChajang.delete(name);
-      else state.selectedChajang.add(name);
+      if (!name) state.selectedChajang.clear();
+      else state.selectedChajang = new Set([name]);
       renderChajangPills(site);
       rebuildContactCharts(site);
       renderContactTable(site);
