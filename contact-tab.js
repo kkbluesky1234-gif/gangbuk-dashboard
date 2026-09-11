@@ -211,6 +211,7 @@ function renderContactTab(site) {
         <div style="display:flex;gap:6px">
           <button id="ctExcelUpload" class="btn btn-outline btn-sm admin-only">엑셀 업로드</button>
           <button id="ctExcelTemplate" class="btn btn-ghost btn-sm">양식 다운로드</button>
+          <button id="ctExcelExport" class="btn btn-ghost btn-sm">📥 엑셀로 내보내기</button>
           <button id="ctAddContact" class="btn btn-primary btn-sm admin-only">+ 접촉 기록 추가</button>
         </div>
       </div>
@@ -949,6 +950,23 @@ function bindContactTabEvents(site) {
     XLSX.utils.book_append_sheet(wb, ws3, "주차별집계");
     XLSX.utils.book_append_sheet(wb, ws2, "행사이력");
     XLSX.writeFile(wb, "접촉현황_양식.xlsx");
+  });
+
+  document.getElementById("ctExcelExport")?.addEventListener("click", () => {
+    const rows = site.contacts.slice().sort((a, b) => (a.date || "").localeCompare(b.date || "")).map(c => ({
+      "날짜": c.date || "", "이름": c.name || "", "생년월일": c.birthDate || "",
+      "담당차장": c.chajang || "", "구분": c.type || "", "직책": c.role || "",
+      "연락처": c.phone || "", "주소": c.address || "", "접촉방법": c.method || "",
+      "성향": c.stance || "", "친밀도": c.level || "", "특이사항": c.note || "",
+      "설문조사참여": c.survey || "", "갤러리투어참여": c.galleryTour || ""
+    }));
+    const eventRows = site.specialEvents.slice().sort((a, b) => (a.date || "").localeCompare(b.date || "")).map(e => ({
+      "날짜": e.date || "", "행사종류": e.type || "", "참여인원": e.count || 0, "메모": e.note || ""
+    }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "명단");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(eventRows), "행사이력");
+    XLSX.writeFile(wb, `${site.name || "현장"}_접촉현황_${todayStr()}.xlsx`);
   });
 
   document.getElementById("ctExcelUpload")?.addEventListener("click", () => {
