@@ -20,6 +20,36 @@ const DEFAULT_EVENT_TYPES = ["투어", "간담회", "설문조사"];
 const EVENT_COLORS = ["#378add", "#d85a30", "#1d9e75", "#8b5cf6", "#f59e0b"];
 const PERIOD_MODES = [["day", "일별"], ["week", "주별"], ["month", "월별"]];
 
+/* 모든 막대/선 그래프 위에 숫자 값을 표시하는 공통 플러그인 (도넛 차트는 제외) */
+if (typeof Chart !== "undefined" && !Chart._ctValueLabelsRegistered) {
+  Chart.register({
+    id: "ctValueLabels",
+    afterDatasetsDraw(chart) {
+      if (chart.config.type === "doughnut" || chart.config.type === "pie") return;
+      const ctx = chart.ctx;
+      chart.data.datasets.forEach((dataset, dsIndex) => {
+        const meta = chart.getDatasetMeta(dsIndex);
+        if (meta.hidden) return;
+        meta.data.forEach((element, index) => {
+          const raw = dataset.data[index];
+          if (raw === null || raw === undefined || raw === 0) return;
+          const pos = element.tooltipPosition ? element.tooltipPosition() : { x: element.x, y: element.y };
+          const isPercent = chart.options?.scales?.y?.ticks?.callback && String(chart.options.scales.y.ticks.callback((0))).includes("%");
+          const text = isPercent ? `${raw}%` : String(raw);
+          ctx.save();
+          ctx.fillStyle = "#334155";
+          ctx.font = "11px Arial, sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "bottom";
+          ctx.fillText(text, pos.x, pos.y - 4);
+          ctx.restore();
+        });
+      });
+    }
+  });
+  Chart._ctValueLabelsRegistered = true;
+}
+
 const _contactCharts = {}; // siteId -> { contact, stance, sentiment, intimacy, event, monthly }
 const _contactState = {}; // siteId -> { selectedChajang: Set, period, selectedStatMonth }
 
@@ -118,10 +148,11 @@ function renderContactTab(site) {
         <div style="display:flex;gap:6px;align-items:center">
           <select id="ctStatMonthSelect" style="border:1px solid var(--slate-300);border-radius:6px;padding:5px 8px;font-size:12px"></select>
           <input type="file" id="ctStatExcelFile" accept=".xlsx,.xls" class="hidden">
+          <button id="ctStatExcelTemplate" class="btn btn-ghost btn-sm">양식 다운로드</button>
           <button id="ctStatExcelUpload" class="btn btn-outline btn-sm admin-only">📊 담당별 집계 엑셀 업로드</button>
         </div>
       </div>
-      <p class="hint" style="margin-bottom:10px">"OO집계" 시트가 있는 파일을 올리면 상담/단순/TM 요약표만 따로 볼 수 있어요 (위의 "전체 명부 업로드"와는 별개 기능입니다).</p>
+      <p class="hint" style="margin-bottom:10px">아래 "양식 다운로드"로 정해진 형식을 받아서 그 형식대로 숫자만 채워 올려주세요 (헤더는 한 줄에 한 번씩만 — 담당/인원/상담/단순/TM/합계/거부/부재/불명/미접촉).</p>
       <div style="position:relative;height:220px;margin-bottom:14px"><canvas id="ctMonthlyStatChart"></canvas></div>
       <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse;font-size:12px">
@@ -662,28 +693,29 @@ function importMonthlyStatExcel(site, binary) {
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
   const headerRows = rows.slice(0, 4);
 
-  // 열 번호를 고정하지 않고, "담당"/"인원"/"상담" 같은 실제 글자 제목을 찾아서 위치를 계산합니다.
-  // "상담/단순/TM/합계/거부/부재/불명/미접촉" 묶음이 보통 "금일"과 "누계" 두 번 반복되는데,
-  // 우리가 원하는 건 두 번째로 나오는(누계) 묶음입니다.
+  // 간단한 고정 양식: 담당/인원/상담/단순/TM/합계/거부/부재/불명/미접촉 — 각 헤더가 시트에 "한 번씩만" 있다고 가정합니다.
   const deptCol = findColByHeader(headerRows, v => v === "담당");
   const headcountCol = findColByHeader(headerRows, v => v === "인원");
-  const sangdamCols = [];
-  headerRows.forEach(row => { if (!row) return; row.forEach((v, c) => { if (cleanHeader(v) === "상담") sangdamCols.push(c); }); });
-  const uniqueSangdam = [...new Set(sangdamCols)].sort((a, b) => a - b);
-  const blockStart = uniqueSangdam.length >= 2 ? uniqueSangdam[uniqueSangdam.length - 1] : uniqueSangdam[0];
+  const idx = {
+    sangdam: findColByHeader(headerRows, v => v === "상담"),
+    dansun: findColByHeader(headerRows, v => v === "단순"),
+    tm: findColByHeader(headerRows, v => v === "TM"),
+    total: findColByHeader(headerRows, v => v === "합계"),
+    geobu: findColByHeader(headerRows, v => v === "거부"),
+    buje: findColByHeader(headerRows, v => v === "부재"),
+    bulmyeong: findColByHeader(headerRows, v => v === "불명"),
+    mijeobchok: findColByHeader(headerRows, v => v === "미접촉")
+  };
 
-  if (deptCol < 0 || headcountCol < 0 || blockStart === undefined) {
-    alert('시트에서 "담당"/"인원"/"상담" 항목을 찾지 못했습니다. 시트 구조를 확인해주세요.');
+  if (deptCol < 0 || headcountCol < 0 || idx.sangdam < 0) {
+    alert('시트에서 "담당"/"인원"/"상담" 항목을 찾지 못했습니다. 안내드린 양식(담당/인원/상담/단순/TM/합계/거부/부재/불명/미접촉, 헤더는 한 줄에 한 번씩)과 맞는지 확인해주세요.');
     return;
   }
 
-  const idx = {
-    sangdam: blockStart, dansun: blockStart + 1, tm: blockStart + 2, total: blockStart + 3,
-    geobu: blockStart + 5, buje: blockStart + 6, bulmyeong: blockStart + 7, mijeobchok: blockStart + 8
-  };
+  const headerRowIdx = headerRows.findIndex(r => r && cleanHeader(r[deptCol]) === "담당");
 
   let added = 0;
-  for (let i = 4; i < rows.length; i++) {
+  for (let i = headerRowIdx + 1; i < rows.length; i++) {
     const row = rows[i];
     if (!row) continue;
     const chajang = String(row[deptCol] || "").trim();
@@ -909,6 +941,16 @@ function bindContactTabEvents(site) {
     };
     reader.readAsBinaryString(file);
     e.target.value = "";
+  });
+
+  document.getElementById("ctStatExcelTemplate")?.addEventListener("click", () => {
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["담당", "인원", "상담", "단순", "TM", "합계", "거부", "부재", "불명", "미접촉"],
+      ["권혜진", 8, 2, 1, 0, 3, 1, 0, 3, 1]
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, "집계");
+    XLSX.writeFile(wb, "담당자별_집계_양식.xlsx");
   });
 
   document.getElementById("ctStatExcelUpload")?.addEventListener("click", () => {
