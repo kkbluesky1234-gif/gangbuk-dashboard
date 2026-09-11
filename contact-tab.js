@@ -711,7 +711,7 @@ function rebuildContactCharts(site) {
   if (typeof Chart === "undefined") return;
   const siteCharts = _contactCharts[site.id] || {};
   ["contact", "stance", "method", "sentiment", "intimacy", "event"].forEach(k => { if (siteCharts[k]) siteCharts[k].destroy(); });
-  const charts = { monthly: siteCharts.monthly };
+  const charts = { ...siteCharts };
   const contacts = selectedContacts(site);
   const state = contactStateFor(site.id);
 
