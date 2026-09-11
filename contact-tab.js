@@ -59,7 +59,6 @@ function ensureContactData(site) {
   site.contacts = site.contacts || [];
   site.companies = site.companies || ["포스코"];
   site.specialEvents = site.specialEvents || [];
-  site.monthlyChajangStats = site.monthlyChajangStats || []; // [{month, chajang, headcount, 상담,단순,TM,합계,거부,부재,불명,미접촉}]
 }
 
 function monthKeyOf(dateStr) {
@@ -146,15 +145,10 @@ function renderContactTab(site) {
 
     <div class="detail-card">
       <div class="detail-card-head">
-        <h4>월별 담당자 접촉현황 집계 (선택 — 상담/단순/TM 요약표만 필요할 때)</h4>
-        <div style="display:flex;gap:6px;align-items:center">
-          <select id="ctStatMonthSelect" style="border:1px solid var(--slate-300);border-radius:6px;padding:5px 8px;font-size:12px"></select>
-          <input type="file" id="ctStatExcelFile" accept=".xlsx,.xls" class="hidden">
-          <button id="ctStatExcelTemplate" class="btn btn-ghost btn-sm">양식 다운로드</button>
-          <button id="ctStatExcelUpload" class="btn btn-outline btn-sm admin-only">📊 담당별 집계 엑셀 업로드</button>
-        </div>
+        <h4>월별 담당자 접촉현황 집계 (전체 명부/명단 데이터에서 자동 계산)</h4>
+        <select id="ctStatMonthSelect" style="border:1px solid var(--slate-300);border-radius:6px;padding:5px 8px;font-size:12px"></select>
       </div>
-      <p class="hint" style="margin-bottom:10px">아래 "양식 다운로드"로 정해진 형식을 받아서 그 형식대로 숫자만 채워 올려주세요 (헤더는 한 줄에 한 번씩만 — 담당/인원/상담/단순/TM/합계/거부/부재/불명/미접촉).</p>
+      <p class="hint" style="margin-bottom:10px">별도 업로드 없이, 위에서 이미 올리신 접촉 기록에서 자동으로 계산돼요. (단, "전체 명부 업로드"로 들어온 기록은 접촉방법 구분이 원본에 없어서 상담/단순상담/TM은 0으로 나올 수 있어요 — 인원수·총 건수는 항상 정확해요.)</p>
       <div style="position:relative;height:220px;margin-bottom:14px"><canvas id="ctMonthlyStatChart"></canvas></div>
       <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse;font-size:12px">
@@ -163,13 +157,12 @@ function renderContactTab(site) {
               <th style="text-align:left;padding:5px 4px;color:var(--slate-500)">담당</th>
               <th style="text-align:right;padding:5px 4px;color:var(--slate-500)">인원</th>
               <th style="text-align:right;padding:5px 4px;color:var(--slate-500)">상담</th>
-              <th style="text-align:right;padding:5px 4px;color:var(--slate-500)">단순</th>
+              <th style="text-align:right;padding:5px 4px;color:var(--slate-500)">단순상담</th>
               <th style="text-align:right;padding:5px 4px;color:var(--slate-500)">TM</th>
-              <th style="text-align:right;padding:5px 4px;color:var(--slate-500)">합계</th>
               <th style="text-align:right;padding:5px 4px;color:var(--slate-500)">거부</th>
               <th style="text-align:right;padding:5px 4px;color:var(--slate-500)">부재</th>
               <th style="text-align:right;padding:5px 4px;color:var(--slate-500)">불명</th>
-              <th style="text-align:right;padding:5px 4px;color:var(--slate-500)">미접촉</th>
+              <th style="text-align:right;padding:5px 4px;color:var(--slate-500);font-weight:700">총 건수</th>
             </tr>
           </thead>
           <tbody id="ctStatBody"></tbody>
@@ -483,7 +476,7 @@ function renderEventTable(site) {
    ========================================================= */
 function renderMonthlyStatSection(site) {
   const state = contactStateFor(site.id);
-  const months = [...new Set(site.monthlyChajangStats.map(s => s.month))].sort();
+  const months = [...new Set(site.contacts.map(c => monthKeyOf(c.date)).filter(Boolean))].sort();
   if (!state.selectedStatMonth || !months.includes(state.selectedStatMonth)) {
     state.selectedStatMonth = months.length ? months[months.length - 1] : null;
   }
@@ -491,43 +484,62 @@ function renderMonthlyStatSection(site) {
   const sel = document.getElementById("ctStatMonthSelect");
   sel.innerHTML = months.length
     ? months.map(m => `<option value="${m}" ${m === state.selectedStatMonth ? "selected" : ""}>${m}</option>`).join("")
-    : `<option value="">업로드된 월 없음</option>`;
-  sel.onchange = () => { state.selectedStatMonth = sel.value; renderMonthlyStatSection(site); rebuildMonthlyStatChart(site); };
+    : `<option value="">데이터 없음</option>`;
+  sel.onchange = () => { state.selectedStatMonth = sel.value; renderMonthlyStatSection(site); };
 
-  const rows = site.monthlyChajangStats.filter(s => s.month === state.selectedStatMonth);
+  const rows = computeMonthlyStatRows(site, state.selectedStatMonth);
   const body = document.getElementById("ctStatBody");
   body.innerHTML = rows.map(s => `
     <tr style="border-bottom:1px solid var(--slate-100)">
       <td style="padding:4px">${esc(s.chajang)}</td>
       <td style="text-align:right;padding:4px">${fmtNum(s.headcount)}</td>
       <td style="text-align:right;padding:4px">${fmtNum(s.상담)}</td>
-      <td style="text-align:right;padding:4px">${fmtNum(s.단순)}</td>
+      <td style="text-align:right;padding:4px">${fmtNum(s.단순상담)}</td>
       <td style="text-align:right;padding:4px">${fmtNum(s.TM)}</td>
-      <td style="text-align:right;padding:4px;font-weight:700">${fmtNum(s.합계)}</td>
       <td style="text-align:right;padding:4px;color:var(--slate-500)">${fmtNum(s.거부)}</td>
       <td style="text-align:right;padding:4px;color:var(--slate-500)">${fmtNum(s.부재)}</td>
       <td style="text-align:right;padding:4px;color:var(--slate-500)">${fmtNum(s.불명)}</td>
-      <td style="text-align:right;padding:4px;color:var(--slate-500)">${fmtNum(s.미접촉)}</td>
-    </tr>`).join("") || `<tr><td colspan="10" style="padding:14px 4px;color:var(--slate-500)">이 월에 업로드된 집계가 없습니다.</td></tr>`;
+      <td style="text-align:right;padding:4px;font-weight:700">${fmtNum(s.total)}</td>
+    </tr>`).join("") || `<tr><td colspan="9" style="padding:14px 4px;color:var(--slate-500)">이 월에 접촉 기록이 없습니다.</td></tr>`;
 
-  rebuildMonthlyStatChart(site);
+  rebuildMonthlyStatChart(site, rows);
 }
 
-function rebuildMonthlyStatChart(site) {
+function computeMonthlyStatRows(site, monthKey) {
+  const byChajang = {};
+  site.contacts.filter(c => monthKeyOf(c.date) === monthKey).forEach(c => {
+    const key = c.chajang || "(담당 미지정)";
+    if (!byChajang[key]) byChajang[key] = { chajang: key, names: new Set(), counts: {} };
+    if (c.name) byChajang[key].names.add(c.name);
+    const m = c.method || "";
+    byChajang[key].counts[m] = (byChajang[key].counts[m] || 0) + 1;
+  });
+  return Object.values(byChajang).map(g => ({
+    chajang: g.chajang,
+    headcount: g.names.size,
+    상담: g.counts["상담"] || 0,
+    단순상담: g.counts["단순상담"] || 0,
+    TM: g.counts["TM"] || 0,
+    거부: g.counts["거부"] || 0,
+    부재: g.counts["부재"] || 0,
+    불명: g.counts["불명"] || 0,
+    total: Object.values(g.counts).reduce((s, v) => s + v, 0)
+  })).sort((a, b) => a.chajang.localeCompare(b.chajang));
+}
+
+function rebuildMonthlyStatChart(site, rows) {
   if (typeof Chart === "undefined") return;
-  const state = contactStateFor(site.id);
   const canvas = document.getElementById("ctMonthlyStatChart");
   if (!canvas) return;
   if (_contactCharts[site.id]?.monthly) _contactCharts[site.id].monthly.destroy();
 
-  const rows = site.monthlyChajangStats.filter(s => s.month === state.selectedStatMonth);
   const chart = new Chart(canvas, {
     type: "bar",
     data: {
       labels: rows.map(s => s.chajang),
       datasets: [
         { label: "상담", data: rows.map(s => s.상담), backgroundColor: "#378add", borderRadius: 4 },
-        { label: "단순", data: rows.map(s => s.단순), backgroundColor: "#eda100", borderRadius: 4 },
+        { label: "단순상담", data: rows.map(s => s.단순상담), backgroundColor: "#eda100", borderRadius: 4 },
         { label: "TM", data: rows.map(s => s.TM), backgroundColor: "#1d9e75", borderRadius: 4 }
       ]
     },
@@ -682,75 +694,6 @@ function numAt(row, idx) {
   return isNaN(n) ? 0 : n;
 }
 
-function importMonthlyStatExcel(site, binary) {
-  const month = prompt("이 데이터는 몇 월 기준인가요? (예: 2026-09)", new Date().toISOString().slice(0, 7));
-  if (!month || !/^\d{4}-\d{2}$/.test(month.trim())) { alert("월 형식이 올바르지 않습니다. 예: 2026-09"); return; }
-  const monthKey = month.trim();
-
-  const wb = XLSX.read(binary, { type: "binary" });
-  const sheetName = wb.SheetNames.find(n => n.includes("집계") && !n.includes("주차"));
-  if (!sheetName) { alert('"집계"라는 이름이 들어간 시트를 찾지 못했습니다. (예: "OO집계")'); return; }
-
-  const sheet = wb.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
-  const headerRows = rows.slice(0, 4);
-
-  // 간단한 고정 양식: 담당/인원/상담/단순/TM/합계/거부/부재/불명/미접촉 — 각 헤더가 시트에 "한 번씩만" 있다고 가정합니다.
-  const deptCol = findColByHeader(headerRows, v => v === "담당");
-  const headcountCol = findColByHeader(headerRows, v => v === "인원");
-  const idx = {
-    sangdam: findColByHeader(headerRows, v => v === "상담"),
-    dansun: findColByHeader(headerRows, v => v === "단순"),
-    tm: findColByHeader(headerRows, v => v === "TM"),
-    total: findColByHeader(headerRows, v => v === "합계"),
-    geobu: findColByHeader(headerRows, v => v === "거부"),
-    buje: findColByHeader(headerRows, v => v === "부재"),
-    bulmyeong: findColByHeader(headerRows, v => v === "불명"),
-    mijeobchok: findColByHeader(headerRows, v => v === "미접촉")
-  };
-
-  if (deptCol < 0 || headcountCol < 0 || idx.sangdam < 0) {
-    alert('시트에서 "담당"/"인원"/"상담" 항목을 찾지 못했습니다. 안내드린 양식(담당/인원/상담/단순/TM/합계/거부/부재/불명/미접촉, 헤더는 한 줄에 한 번씩)과 맞는지 확인해주세요.');
-    return;
-  }
-
-  const headerRowIdx = headerRows.findIndex(r => r && cleanHeader(r[deptCol]) === "담당");
-
-  let added = 0;
-  for (let i = headerRowIdx + 1; i < rows.length; i++) {
-    const row = rows[i];
-    if (!row) continue;
-    const chajang = String(row[deptCol] || "").trim();
-    if (!chajang) continue;
-
-    const entry = {
-      month: monthKey,
-      chajang,
-      headcount: numAt(row, headcountCol),
-      상담: numAt(row, idx.sangdam),
-      단순: numAt(row, idx.dansun),
-      TM: numAt(row, idx.tm),
-      합계: numAt(row, idx.total),
-      거부: numAt(row, idx.geobu),
-      부재: numAt(row, idx.buje),
-      불명: numAt(row, idx.bulmyeong),
-      미접촉: numAt(row, idx.mijeobchok)
-    };
-
-    const existingIdx = site.monthlyChajangStats.findIndex(s => s.month === monthKey && s.chajang === chajang);
-    if (existingIdx >= 0) site.monthlyChajangStats[existingIdx] = entry;
-    else site.monthlyChajangStats.push(entry);
-    added++;
-  }
-
-  if (!added) { alert("인식된 담당자 행이 없습니다. 시트 구조를 확인해주세요."); return; }
-
-  persist();
-  const state = contactStateFor(site.id);
-  state.selectedStatMonth = monthKey;
-  renderMonthlyStatSection(site);
-  alert(`${monthKey} 기준, ${added}명의 담당자 집계를 불러왔습니다.`);
-}
 
 /* ---------- 집계 + 차트 (개별 접촉 기록 기준) ---------- */
 function buildRangeKeys(dates, mode) {
@@ -939,31 +882,6 @@ function bindContactTabEvents(site) {
     const reader = new FileReader();
     reader.onload = evt => {
       try { importMasterRegistryExcel(site, evt.target.result); }
-      catch (err) { alert("엑셀 파일을 읽는 중 문제가 발생했습니다: " + err.message); }
-    };
-    reader.readAsBinaryString(file);
-    e.target.value = "";
-  });
-
-  document.getElementById("ctStatExcelTemplate")?.addEventListener("click", () => {
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet([
-      ["담당", "인원", "상담", "단순", "TM", "합계", "거부", "부재", "불명", "미접촉"],
-      ["권혜진", 8, 2, 1, 0, 3, 1, 0, 3, 1]
-    ]);
-    XLSX.utils.book_append_sheet(wb, ws, "집계");
-    XLSX.writeFile(wb, "담당자별_집계_양식.xlsx");
-  });
-
-  document.getElementById("ctStatExcelUpload")?.addEventListener("click", () => {
-    document.getElementById("ctStatExcelFile").click();
-  });
-  document.getElementById("ctStatExcelFile")?.addEventListener("change", e => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = evt => {
-      try { importMonthlyStatExcel(site, evt.target.result); }
       catch (err) { alert("엑셀 파일을 읽는 중 문제가 발생했습니다: " + err.message); }
     };
     reader.readAsBinaryString(file);
