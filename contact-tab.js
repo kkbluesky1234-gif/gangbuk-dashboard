@@ -660,27 +660,47 @@ function importMonthlyStatExcel(site, binary) {
 
   const sheet = wb.Sheets[sheetName];
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
-  // 1~4행: 제목/헤더, 5행부터 데이터. B열(idx1)=담당, C열(idx2)=인원,
-  // D~G(idx3~6)=금일 상담/단순/TM/누계, I~L(idx8~11)=금일 거부/부재/불명/미접촉,
-  // M~P(idx12~15)=누계 상담/단순/TM/합계, R~U(idx17~20)=누계 거부/부재/불명/미접촉
+  const headerRows = rows.slice(0, 4);
+
+  // 열 번호를 고정하지 않고, "담당"/"인원"/"상담" 같은 실제 글자 제목을 찾아서 위치를 계산합니다.
+  // "상담/단순/TM/합계/거부/부재/불명/미접촉" 묶음이 보통 "금일"과 "누계" 두 번 반복되는데,
+  // 우리가 원하는 건 두 번째로 나오는(누계) 묶음입니다.
+  const deptCol = findColByHeader(headerRows, v => v === "담당");
+  const headcountCol = findColByHeader(headerRows, v => v === "인원");
+  const sangdamCols = [];
+  headerRows.forEach(row => { if (!row) return; row.forEach((v, c) => { if (cleanHeader(v) === "상담") sangdamCols.push(c); }); });
+  const uniqueSangdam = [...new Set(sangdamCols)].sort((a, b) => a - b);
+  const blockStart = uniqueSangdam.length >= 2 ? uniqueSangdam[uniqueSangdam.length - 1] : uniqueSangdam[0];
+
+  if (deptCol < 0 || headcountCol < 0 || blockStart === undefined) {
+    alert('시트에서 "담당"/"인원"/"상담" 항목을 찾지 못했습니다. 시트 구조를 확인해주세요.');
+    return;
+  }
+
+  const idx = {
+    sangdam: blockStart, dansun: blockStart + 1, tm: blockStart + 2, total: blockStart + 3,
+    geobu: blockStart + 5, buje: blockStart + 6, bulmyeong: blockStart + 7, mijeobchok: blockStart + 8
+  };
+
   let added = 0;
   for (let i = 4; i < rows.length; i++) {
     const row = rows[i];
-    const chajang = String(row[1] || "").trim();
+    if (!row) continue;
+    const chajang = String(row[deptCol] || "").trim();
     if (!chajang) continue;
 
     const entry = {
       month: monthKey,
       chajang,
-      headcount: numAt(row, 2),
-      상담: numAt(row, 12),
-      단순: numAt(row, 13),
-      TM: numAt(row, 14),
-      합계: numAt(row, 15),
-      거부: numAt(row, 17),
-      부재: numAt(row, 18),
-      불명: numAt(row, 19),
-      미접촉: numAt(row, 20)
+      headcount: numAt(row, headcountCol),
+      상담: numAt(row, idx.sangdam),
+      단순: numAt(row, idx.dansun),
+      TM: numAt(row, idx.tm),
+      합계: numAt(row, idx.total),
+      거부: numAt(row, idx.geobu),
+      부재: numAt(row, idx.buje),
+      불명: numAt(row, idx.bulmyeong),
+      미접촉: numAt(row, idx.mijeobchok)
     };
 
     const existingIdx = site.monthlyChajangStats.findIndex(s => s.month === monthKey && s.chajang === chajang);
