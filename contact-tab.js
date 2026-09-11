@@ -48,6 +48,8 @@ if (typeof Chart !== "undefined" && !Chart._ctValueLabelsRegistered) {
     }
   });
   Chart._ctValueLabelsRegistered = true;
+  Chart.defaults.layout = Chart.defaults.layout || {};
+  Chart.defaults.layout.padding = { top: 22 };
 }
 
 const _contactCharts = {}; // siteId -> { contact, stance, sentiment, intimacy, event, monthly }
