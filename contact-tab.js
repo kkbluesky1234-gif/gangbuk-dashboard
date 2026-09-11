@@ -1155,10 +1155,12 @@ function cleanHeader(v) {
   return String(v ?? "").replace(/[\s\n\r]/g, "");
 }
 function findColByHeader(headerRows, predicate) {
-  for (const row of headerRows) {
-    if (!row) continue;
-    for (let c = 0; c < row.length; c++) {
-      if (predicate(cleanHeader(row[c]))) return c;
+  // 왼쪽(앞쪽)에 있는 진짜 항목을 먼저 찾도록, 줄 단위가 아니라 "칸(열) 번호" 기준으로 왼쪽부터 확인합니다.
+  // (뒤쪽 열에 있는 무관한 항목에 같은 글자가 우연히 포함돼 있어도 잘못 짚지 않도록 하기 위함입니다.)
+  const maxCols = Math.max(0, ...headerRows.map(r => (r ? r.length : 0)));
+  for (let c = 0; c < maxCols; c++) {
+    for (const row of headerRows) {
+      if (row && predicate(cleanHeader(row[c]))) return c;
     }
   }
   return -1;
