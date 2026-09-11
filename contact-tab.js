@@ -941,8 +941,12 @@ function bindContactTabEvents(site) {
       "날짜", "이름", "생년월일", "담당차장", "구분", "직책", "연락처", "주소",
       "접촉방법", "성향", "친밀도", "특이사항", "설문조사참여", "갤러리투어참여"
     ]]);
+    const ws3 = XLSX.utils.aoa_to_sheet([[
+      "담당차장", "이름", "구분", "직책", "월", "1주", "2주", "3주", "4주", "5주", "성향", "친밀도"
+    ]]);
     const ws2 = XLSX.utils.aoa_to_sheet([["날짜", "행사종류", "참여인원", "메모"]]);
     XLSX.utils.book_append_sheet(wb, ws1, "명단");
+    XLSX.utils.book_append_sheet(wb, ws3, "주차별집계");
     XLSX.utils.book_append_sheet(wb, ws2, "행사이력");
     XLSX.writeFile(wb, "접촉현황_양식.xlsx");
   });
@@ -1004,6 +1008,34 @@ function importContactExcel(site, binary) {
         site.companies.push(incoming.stance);
       }
     });
+  }
+
+  if (wb.SheetNames.includes("주차별집계")) {
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets["주차별집계"], { defval: "" });
+    let addedWeekly = 0;
+    rows.forEach(row => {
+      const name = String(row["이름"] || "").trim();
+      const month = String(row["월"] || "").trim();
+      if (!name || !/^\d{4}-\d{2}$/.test(month)) return;
+      const [y, m] = month.split("-").map(Number);
+      const chajang = String(row["담당차장"] || "").trim();
+      const type = CONTACT_TYPES.includes(row["구분"]) ? row["구분"] : "조합원";
+      const role = String(row["직책"] || "").trim();
+      const stance = String(row["성향"] || "미정").trim();
+      const level = CONTACT_LEVELS.includes(row["친밀도"]) ? row["친밀도"] : "하";
+
+      [1, 2, 3, 4, 5].forEach(wk => {
+        const count = Number(row[`${wk}주`]) || 0;
+        for (let i = 0; i < count; i++) {
+          const day = Math.min(28, (wk - 1) * 7 + 1 + (i % 7)); // 주차 범위 안의 날짜로 분산 배치
+          const date = `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+          site.contacts.push({ id: uid(), date, name, chajang, type, role, stance, level });
+          addedWeekly++;
+        }
+      });
+      if (stance && stance !== "미정" && !site.companies.includes(stance)) site.companies.push(stance);
+    });
+    addedContacts += addedWeekly;
   }
 
   if (wb.SheetNames.includes("행사이력")) {
@@ -1107,6 +1139,10 @@ function importMasterRegistryExcel(site, binary) {
 
   const stanceLabelRow = headerRows[headerRows.findIndex(r => r && r[stanceStart + 1])] || headerRows[3] || [];
   const intimacyLabelRow = stanceLabelRow;
+  const isRealLabel = v => {
+    const s = String(v ?? "").trim();
+    return s && !/^-?\d+(\.\d+)?$/.test(s); // 순수 숫자는 라벨이 아니라 잘못 읽힌 데이터일 가능성이 큼
+  };
 
   const existingKeys = new Set(site.contacts.map(c => `${c.name}__${c.date}`));
   let added = 0, peopleTouched = new Set();
@@ -1124,11 +1160,11 @@ function importMasterRegistryExcel(site, binary) {
 
     let stance = "미정";
     for (let c = stanceStart + 1; c < intimacyStart; c++) {
-      if (row[c]) { stance = String(stanceLabelRow[c] ?? "").trim() || "미정"; break; }
+      if (row[c] && isRealLabel(stanceLabelRow[c])) { stance = String(stanceLabelRow[c]).trim(); break; }
     }
     let level = "하";
     for (let c = intimacyStart + 1; c < intimacyEnd; c++) {
-      if (row[c]) { level = String(intimacyLabelRow[c] ?? "").trim() || "하"; break; }
+      if (row[c] && isRealLabel(intimacyLabelRow[c])) { level = String(intimacyLabelRow[c]).trim(); break; }
     }
 
     let personHasContact = false;
