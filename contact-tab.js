@@ -27,7 +27,7 @@ function leaseRoleOf(v) {
   if (!s || /후보|탈락|낙선|당선|사퇴/.test(s)) return "";
   return LEASE_ROLES.find(r => s.includes(r)) ? s : "";
 }
-const CONTACT_TAB_VERSION = "2026-09-30 v18";
+const CONTACT_TAB_VERSION = "2026-09-30 v20";
 
 /* 모든 막대/선 그래프 위에 숫자 값을 표시하는 공통 플러그인 (도넛 차트는 제외) */
 if (typeof Chart !== "undefined" && !Chart._ctValueLabelsRegistered) {
@@ -711,8 +711,201 @@ ${single ? `
 </body></html>`;
 }
 
-function printContactReport(site, size) {
-  const html = buildContactReportHtml(site, size);
+/* =========================================================
+   임대의원 1장 요약 — 전체 + 차장별 명단을 A4 가로 한 장에
+   ========================================================= */
+function buildLeaseOnePageHtml(site, size) {
+  const state = contactStateFor(site.id);
+  const regDates = registryDates(site);
+  const regDate = state.selectedRegDate || regDates[regDates.length - 1] || "";
+  const printedAt = todayStr();
+  const GOOD = ["상담", "단순상담", "TM"];
+  const pctN = (a, b) => b ? Math.round(a / b * 1000) / 10 : 0;
+
+  const months = [...new Set(site.contacts.map(c => monthKeyOf(c.date)).filter(m => /^\d{4}-\d{2}$/.test(m)))].sort();
+  const month = state.selectedWeeklyMonth || months[months.length - 1] || "";
+  const ranges = weekRangesOfMonth(month);
+  const monthNo = Number(month.slice(5, 7)) || "";
+
+  // 임대의원 명단 (명부 기준)
+  let people = regDates.length ? registryRows(site, regDate, true).filter(x => x.type === "임대의원")
+    .map(x => ({ key: x.key, chajang: x.chajang || "(담당 미지정)", role: x.role || "임대의원", cum: x.cumMethod, week: x.weekMethod })) : [];
+  if (people.length && !people[0].key) people = [];
+  if (!people.length) {
+    const m = {};
+    site.contacts.filter(c => c.type === "임대의원" && c.name).forEach(c => {
+      m[personKey(c)] = { key: personKey(c), chajang: c.chajang || "(담당 미지정)", role: c.role || "임대의원", cum: c.method || "미접촉", week: "" };
+    });
+    people = Object.values(m);
+  }
+  const leaseKeys = new Set(people.map(p => p.key));
+  const cntByKey = {}, wkSets = ranges.map(() => new Set()), wkCnt = ranges.map(() => 0);
+  site.contacts.forEach(c => {
+    if (!c.name || !isValidDateStr(c.date) || !ranges.length || c.date < ranges[0].start || c.date > ranges[ranges.length - 1].end) return;
+    const k = personKey(c);
+    if (!leaseKeys.has(k)) return;
+    cntByKey[k] = (cntByKey[k] || 0) + 1;
+    const w = weekIndexIn(ranges, c.date);
+    if (w) { wkSets[w - 1].add(k); wkCnt[w - 1]++; }
+  });
+
+  const ROLE_ORDER = ["조합장", "부조합장", "감사", "이사", "대의원"];
+  const roleIdx = r => { const i = ROLE_ORDER.findIndex(x => (r || "").includes(x)); return i < 0 ? 9 : i; };
+  const stIdx = s => { const i = REG_STATUS.indexOf(s); return i < 0 ? 9 : i; };
+  const by = {};
+  people.forEach(p => (by[p.chajang] = by[p.chajang] || []).push(p));
+  const names = Object.keys(by).sort((a, b) => (a === "미배정") - (b === "미배정") || a.localeCompare(b));
+  const stat = list => {
+    const o = { total: list.length, good: 0, wk: 0, refuse: 0, absent: 0, none: 0, met: 0 };
+    list.forEach(p => {
+      if (GOOD.includes(p.cum)) o.good++; else if (p.cum === "거부") o.refuse++; else if (p.cum === "부재" || p.cum === "불명") o.absent++; else o.none++;
+      if (GOOD.includes(p.week)) o.wk++;
+      if (cntByKey[p.key]) o.met++;
+    });
+    return o;
+  };
+  const all = stat(people);
+  const C = { good: "#2f6fb5", refuse: "#d9534f", absent: "#f0ad4e", none: "#d5dbe3" };
+
+  // ① 도넛 (SVG)
+  const R = 42, CIRC = 2 * Math.PI * R;
+  let off = 0;
+  const segs = [["good", all.good], ["refuse", all.refuse], ["absent", all.absent], ["none", all.none]].filter(x => x[1]);
+  const donut = `<svg viewBox="0 0 110 110" width="100%" height="100%">
+    <circle cx="55" cy="55" r="${R}" fill="none" stroke="#eef2f7" stroke-width="14"/>
+    ${segs.map(([k, v]) => { const len = v / (all.total || 1) * CIRC; const el = `<circle cx="55" cy="55" r="${R}" fill="none" stroke="${C[k]}" stroke-width="14" stroke-dasharray="${len} ${CIRC - len}" stroke-dashoffset="${-off}" transform="rotate(-90 55 55)"/>`; off += len; return el; }).join("")}
+    <text x="55" y="53" text-anchor="middle" font-size="17" font-weight="800" fill="#1f3b5c">${pctN(all.good, all.total)}%</text>
+    <text x="55" y="67" text-anchor="middle" font-size="7.5" fill="#6b7280">누계 접촉률</text></svg>`;
+
+  // ② 담당별 구성 막대 (인원 기준, 길이 = 인원 수)
+  const maxT = Math.max(1, ...names.map(n => by[n].length));
+  const barRows = names.map(n => {
+    const s = stat(by[n]);
+    const seg = (k, v) => v ? `<i style="width:${v / maxT * 100}%;background:${C[k]}">${v / maxT >= 0.09 ? v : ""}</i>` : "";
+    return `<div class="br"><div class="bn">${esc(n)}</div><div class="bt">${seg("good", s.good)}${seg("refuse", s.refuse)}${seg("absent", s.absent)}${seg("none", s.none)}</div><div class="bv"><b>${s.good}</b>/${s.total}<small>${pctN(s.good, s.total)}%</small></div></div>`;
+  }).join("");
+
+  // ③ 주차별 막대 (임대의원 접촉 인원)
+  const wMax = Math.max(1, ...wkSets.map(s => s.size));
+  const weekChart = ranges.length ? `<div class="wk">${ranges.map((r, i) => `
+    <div class="wc"><div class="wbar"><i style="height:${wkSets[i].size / wMax * 100}%"><span>${wkSets[i].size}</span></i></div>
+    <div class="wl">${i + 1}주<small>${shortMD(r.start)}~${shortMD(r.end)}</small></div></div>`).join("")}</div>` : "";
+
+  // ④ 명단 카드
+  const cls = s => ({ "상담": "g", "단순상담": "g", "TM": "g", "거부": "r", "부재": "a", "불명": "a", "미접촉": "n" }[s] || "n");
+  const shortM = s => s === "단순상담" ? "단순" : (s || "-");
+  const nameOf = k => esc(((k || "").split("|")[0]).split(/\s+/)[0]);
+  const cards = names.map(n => {
+    const list = by[n].slice().sort((a, b) => roleIdx(a.role) - roleIdx(b.role) || stIdx(a.cum) - stIdx(b.cum) || a.key.localeCompare(b.key));
+    const s = stat(list);
+    return `<div class="card"><div class="ch"><b>${esc(n)}</b><span>${s.good}/${s.total}명 접촉</span></div>
+      <table class="lt">${list.map(p => `<tr><td class="nm">${nameOf(p.key)}</td><td class="rl">${esc(p.role)}</td>
+        <td class="st"><span class="dot ${cls(p.cum)}"></span>${esc(shortM(p.cum))}</td>
+        <td class="ct">${cntByKey[p.key] ? `${cntByKey[p.key]}회` : `<span class="z">-</span>`}</td></tr>`).join("")}</table></div>`;
+  }).join("");
+
+  const refuse = people.filter(p => p.cum === "거부");
+  const lo = names.filter(n => n !== "미배정" && by[n].length >= 3).map(n => ({ n, s: stat(by[n]) })).sort((a, b) => pctN(a.s.good, a.s.total) - pctN(b.s.good, b.s.total))[0];
+  const busiest = wkSets.reduce((m, s, i) => s.size > m.v ? { v: s.size, i } : m, { v: -1, i: 0 });
+
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(site.name || "현장")} 임대의원 접촉현황</title>
+<style>
+  @page { size: ${size} landscape; margin: 0; }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { margin: 0; font-family: "Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo", sans-serif; color: #1f2937; font-size: 8pt; }
+  .page { padding: 8mm 10mm 6mm; height: ${size === "A3" ? "297mm" : "210mm"}; overflow: hidden; display: flex; flex-direction: column; }
+  .band { display: flex; justify-content: space-between; align-items: center; border-bottom: 2.5px solid #1f3b5c; padding: 0 2px 5px; margin-bottom: 7px; }
+  .band .ttl { font-size: 16pt; font-weight: 800; color: #1f3b5c; letter-spacing: -0.5px; }
+  .band .ttl small { font-size: 9pt; font-weight: 600; color: #6b7280; margin-right: 8px; }
+  .band .meta { font-size: 8pt; color: #6b7280; text-align: right; line-height: 1.45; }
+  .main { flex: 1; display: grid; grid-template-columns: 41% 1fr; gap: 12px; min-height: 0; }
+  .left { display: flex; flex-direction: column; gap: 8px; }
+  .box { border: 1px solid #e3e8ef; border-radius: 7px; padding: 7px 11px; }
+  .box h3 { margin: 0 0 6px; font-size: 9pt; color: #1f3b5c; display: flex; justify-content: space-between; align-items: baseline; }
+  .box h3 small { font-weight: 400; font-size: 7pt; color: #6b7280; }
+  .hero { display: grid; grid-template-columns: 34mm 1fr; gap: 10px; align-items: center; }
+  .hero .d { width: 34mm; height: 34mm; }
+  .kgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 10px; }
+  .k .l { font-size: 7.3pt; color: #6b7280; } .k .v { font-size: 14pt; font-weight: 800; color: #1f3b5c; line-height: 1.15; } .k .v span { font-size: 7.5pt; color: #4b5563; margin-left: 1px; }
+  .k.r .v { color: #b42318; }
+  .legend { display: flex; gap: 10px; font-size: 7pt; color: #4b5563; margin-top: 4px; }
+  .legend em { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 3px; vertical-align: -1px; }
+  .br { display: grid; grid-template-columns: 15mm 1fr 19mm; align-items: center; gap: 6px; margin-bottom: 3.2px; }
+  .bn { font-size: 7.8pt; font-weight: 700; color: #111827; white-space: nowrap; }
+  .bt { display: flex; height: 11px; background: #f5f7fa; border-radius: 3px; overflow: hidden; }
+  .bt i { display: flex; align-items: center; justify-content: center; color: #fff; font-style: normal; font-size: 6.6pt; font-weight: 700; }
+  .bv { font-size: 7.4pt; color: #374151; white-space: nowrap; } .bv b { color: #1f3b5c; } .bv small { color: #6b7280; margin-left: 4px; font-size: 6.8pt; }
+  .wk { display: flex; gap: 8px; height: 25mm; align-items: flex-end; padding-top: 10px; }
+  .wc { flex: 1; display: flex; flex-direction: column; height: 100%; }
+  .wbar { flex: 1; display: flex; align-items: flex-end; justify-content: center; border-bottom: 1px solid #cfd8e3; }
+  .wbar i { position: relative; width: 62%; background: #2f6fb5; border-radius: 3px 3px 0 0; min-height: 1px; }
+  .wbar i span { position: absolute; top: -12px; left: -6px; right: -6px; text-align: center; font-style: normal; font-size: 7.3pt; font-weight: 700; color: #1f3b5c; }
+  .wl { text-align: center; font-size: 7.3pt; font-weight: 700; color: #374151; padding-top: 2px; } .wl small { display: block; font-weight: 400; font-size: 6.3pt; color: #6b7280; }
+  .notes { margin: 0; padding-left: 13px; font-size: 7.6pt; line-height: 1.6; color: #374151; } .notes b { color: #1f3b5c; } .notes .r { color: #b42318; font-weight: 700; }
+  .right { display: flex; flex-direction: column; min-height: 0; }
+  .right h3 { margin: 0 0 5px; font-size: 9pt; color: #1f3b5c; display: flex; justify-content: space-between; align-items: baseline; }
+  .right h3 small { font-weight: 400; font-size: 7pt; color: #6b7280; }
+  .cards { column-count: 3; column-gap: 7px; flex: 1; }
+  .card { break-inside: avoid; border: 1px solid #e3e8ef; border-radius: 6px; margin-bottom: 6px; overflow: hidden; }
+  .card .ch { display: flex; justify-content: space-between; align-items: baseline; padding: 3px 8px; background: #f3f6fa; border-bottom: 1px solid #e3e8ef; }
+  .card .ch b { font-size: 8.3pt; color: #1f3b5c; } .card .ch span { font-size: 6.8pt; color: #6b7280; }
+  .lt { width: 100%; border-collapse: collapse; font-size: 7.4pt; }
+  .lt td { padding: 0.7px 6px; border-bottom: 1px solid #f2f4f7; white-space: nowrap; }
+  .lt tr:last-child td { border-bottom: 0; }
+  .lt .nm { font-weight: 600; color: #111827; } .lt .rl { color: #9ca3af; font-size: 6.7pt; }
+  .lt .st { font-size: 7pt; color: #374151; } .lt .ct { text-align: right; font-weight: 700; color: #1f3b5c; font-size: 7pt; } .lt .z { color: #d1d5db; font-weight: 400; }
+  .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; vertical-align: 1px; }
+  .dot.g { background: #2f6fb5; } .dot.r { background: #d9534f; } .dot.a { background: #f0ad4e; } .dot.n { background: #cbd5e1; }
+  .foot { display: flex; justify-content: space-between; font-size: 6.8pt; color: #9ca3af; margin-top: 3px; }
+</style></head><body>
+<div class="page">
+  <div class="band">
+    <div class="ttl"><small>${esc(site.name || "현장")}</small>임대의원 접촉현황</div>
+    <div class="meta">기준일 ${esc(regDate || printedAt)} · 조합장·감사·이사·대의원<br>접촉 횟수 = ${monthNo}월 기준</div>
+  </div>
+  <div class="main">
+    <div class="left">
+      <div class="box">
+        <div class="hero"><div class="d">${donut}</div>
+          <div class="kgrid">
+            <div class="k"><div class="l">임대의원</div><div class="v">${all.total}<span>명</span></div></div>
+            <div class="k"><div class="l">누계 접촉</div><div class="v">${all.good}<span>명</span></div></div>
+            <div class="k"><div class="l">${monthNo}월에 만난 인원</div><div class="v">${all.met}<span>명</span></div></div>
+            <div class="k r"><div class="l">거부</div><div class="v">${all.refuse}<span>명</span></div></div>
+          </div>
+        </div>
+        <div class="legend"><span><em style="background:${C.good}"></em>접촉 ${all.good}</span><span><em style="background:${C.refuse}"></em>거부 ${all.refuse}</span><span><em style="background:${C.absent}"></em>부재·불명 ${all.absent}</span><span><em style="background:${C.none}"></em>미접촉 ${all.none}</span></div>
+      </div>
+      <div class="box">
+        <h3>담당별 접촉 현황 <small>막대 길이 = 임대의원 수</small></h3>
+        ${barRows}
+      </div>
+      <div class="box">
+        <h3>${monthNo}월 주차별 접촉 인원 <small>임대의원 중 그 주에 만난 사람</small></h3>
+        ${weekChart}
+      </div>
+      <div class="box">
+        <h3>주요 사항</h3>
+        <ul class="notes">
+          <li>임대의원 <b>${all.total}명</b> 중 <b>${all.good}명 접촉 (${pctN(all.good, all.total)}%)</b>, 주차 접촉 ${all.wk}명</li>
+          ${refuse.length ? `<li><span class="r">거부 ${refuse.length}명</span> — ${refuse.map(p => `${nameOf(p.key)}(${esc(p.chajang)})`).join(", ")}</li>` : ""}
+          ${lo ? `<li>접촉률이 가장 낮은 담당: <b>${esc(lo.n)} ${pctN(lo.s.good, lo.s.total)}%</b> (${lo.s.good}/${lo.s.total}명)</li>` : ""}
+          ${busiest.v > 0 ? `<li>${monthNo}월 가장 많이 만난 주: <b>${busiest.i + 1}주 ${busiest.v}명</b></li>` : ""}
+        </ul>
+      </div>
+    </div>
+    <div class="right">
+      <h3>차장별 임대의원 명단 <small><span class="dot g"></span>접촉 <span class="dot r"></span>거부 <span class="dot a"></span>부재·불명 <span class="dot n"></span>미접촉 · 오른쪽 = ${monthNo}월 접촉 횟수</small></h3>
+      <div class="cards">${cards || `<p>임대의원 명단이 없습니다. 명부를 다시 업로드해주세요.</p>`}</div>
+    </div>
+  </div>
+  <div class="foot"><span>${esc(site.name || "")} · 임대의원 접촉현황</span><span>출력 ${printedAt}</span></div>
+</div>
+</body></html>`;
+}
+
+function printContactReport(site, size, builder) {
+  const html = (builder || buildContactReportHtml)(site, size);
   let frame = document.getElementById("ctReportFrame");
   if (frame) frame.remove();
   frame = document.createElement("iframe");
@@ -730,10 +923,10 @@ function printContactReport(site, size) {
 }
 
 /* 인쇄 전에 미리보기로 확인하고 싶을 때: 새 창에 보고서만 띄우기 */
-function previewContactReport(site, size) {
+function previewContactReport(site, size, builder) {
   const w = window.open("", "_blank");
   if (!w) { alert("팝업이 차단되었습니다. 브라우저 주소창 오른쪽에서 팝업 허용 후 다시 눌러주세요."); return; }
-  w.document.open(); w.document.write(buildContactReportHtml(site, size).replace("</body>",
+  w.document.open(); w.document.write((builder || buildContactReportHtml)(site, size).replace("</body>",
     `<div style="position:fixed;top:10px;right:14px" class="noprint"><button onclick="window.print()" style="font-size:14px;padding:8px 16px;background:#1e3a5f;color:#fff;border:0;border-radius:6px;cursor:pointer">🖨 인쇄</button></div>
      <style>@media print{.noprint{display:none}} @media screen{body{background:#e2e8f0}.page{background:#fff;width:${size === "A3" ? "420mm" : "297mm"};margin:12px auto;box-shadow:0 2px 8px rgba(0,0,0,.15)}}</style></body>`));
   w.document.close();
@@ -757,6 +950,7 @@ function renderContactTab(site) {
       <button id="ctReportPreview" class="btn btn-outline btn-sm">👁 보고서 미리보기</button>
       <button id="ctPrintA4" class="btn btn-primary btn-sm">📄 보고서 출력 (A4 가로)</button>
       <button id="ctPrintA3" class="btn btn-outline btn-sm">📄 A3 가로</button>
+      <button id="ctPrintLease" class="btn btn-outline btn-sm" title="임대의원 전체 + 차장별 명단을 A4 한 장에">📄 임대의원 1장 요약</button>
     </div>
 
     <div class="detail-card">
@@ -1844,6 +2038,7 @@ function bindContactTabEvents(site) {
   document.getElementById("ctPrintA4")?.addEventListener("click", () => printContactReport(site, "A4"));
   document.getElementById("ctPrintA3")?.addEventListener("click", () => printContactReport(site, "A3"));
   document.getElementById("ctReportPreview")?.addEventListener("click", () => previewContactReport(site, "A4"));
+  document.getElementById("ctPrintLease")?.addEventListener("click", () => previewContactReport(site, "A4", buildLeaseOnePageHtml));
 
   document.getElementById("ctMasterExcelUpload")?.addEventListener("click", () => {
     document.getElementById("ctMasterExcelFile").click();
