@@ -82,7 +82,43 @@ function ensureContactData(site) {
     }));
     migrated = true;
   }
+  // 예전 업로드에서 잘못 들어간 숫자/날짜 성향 값(예: 1024) 정리
+  const badCompanies = site.companies.filter(c => !isValidStanceLabel(c));
+  if (badCompanies.length) { site.companies = site.companies.filter(isValidStanceLabel); migrated = true; }
+  [...site.contacts, ...site.stanceSnapshots].forEach(c => {
+    const fixed = cleanStance(c.stance);
+    if ((c.stance || "미정") !== fixed) { c.stance = fixed; migrated = true; }
+  });
   if (migrated) persist();
+}
+
+/* 성향 값으로 쓸 수 없는 것: 빈칸, 숫자, 날짜처럼 생긴 값 (예: 1024, 10/24, 10.24, 10월24일) */
+function isValidStanceLabel(v) {
+  const s = String(v ?? "").trim();
+  if (!s) return false;
+  if (/^[\d\s.,\/\-~:()년월일주차]+$/.test(s)) return false;
+  return true;
+}
+function cleanStance(v) {
+  const s = String(v ?? "").trim();
+  return s === "미정" || isValidStanceLabel(s) ? (s || "미정") : "미정";
+}
+
+/* 접촉방식 값 해석: 명부 날짜 칸에 적힌 글자(상담/단순/TM/거부/부재/불명 등) → 표준 접촉방법 */
+const METHOD_ALIASES = [
+  ["단순상담", ["단순상담", "단순", "단"]],
+  ["상담", ["상담", "대면", "면담", "방문", "상"]],
+  ["TM", ["tm", "전화", "통화", "t"]],
+  ["거부", ["거부", "거절", "거"]],
+  ["부재", ["부재", "부재중", "부"]],
+  ["불명", ["불명", "결번", "주소불명", "불"]]
+];
+function parseMethod(v) {
+  const s = String(v ?? "").replace(/\s/g, "").toLowerCase();
+  if (!s) return "";
+  for (const [method, aliases] of METHOD_ALIASES) if (aliases.includes(s)) return method;
+  for (const [method, aliases] of METHOD_ALIASES) if (aliases.some(a => a.length > 1 && s.includes(a))) return method;
+  return "";
 }
 
 /* [수정 #12] 동명이인 구분: 이름 + 생년월일(있을 때) */
@@ -263,7 +299,7 @@ function renderContactTab(site) {
         <h4>월별 담당자 접촉현황 집계 (전체 명부/명단 데이터에서 자동 계산)</h4>
         <select id="ctStatMonthSelect" style="border:1px solid var(--slate-300);border-radius:6px;padding:5px 8px;font-size:12px"></select>
       </div>
-      <p class="hint" style="margin-bottom:10px">위 차장 선택이 그대로 적용됩니다. "전체 명부 업로드"로 들어온 기록은 원본에 접촉방법 구분이 없어서 회색 <b>구분없음</b>으로 표시되고, 그 달 기록이 전부 명부 데이터면 <b>인원·총 건수</b> 그래프로 바뀌어요.</p>
+      <p class="hint" style="margin-bottom:10px">위 차장 선택이 그대로 적용됩니다. 명부 날짜 칸에 적힌 접촉방식(상담·단순·TM·거부·부재·불명)을 읽어 집계하고, 읽을 수 없는 값은 회색 <b>구분없음</b>으로 표시돼요.</p>
       <div style="position:relative;height:220px;margin-bottom:14px"><canvas id="ctMonthlyStatChart"></canvas></div>
       <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse;font-size:12px">
@@ -1180,7 +1216,7 @@ function importContactExcel(site, binary) {
         phone: String(row["연락처"] || "").trim(),
         address: String(row["주소"] || "").trim(),
         method: String(row["접촉방법"] || "").trim(),
-        stance: String(row["성향"] || "").trim() || "미정",
+        stance: cleanStance(row["성향"]),
         level: CONTACT_LEVELS.includes(levelRaw) ? levelRaw : "하",
         note: String(row["특이사항"] || "").trim(),
         survey: String(row["설문조사참여"] || "").trim(),
@@ -1224,7 +1260,7 @@ function importContactExcel(site, binary) {
       const typeRaw = String(row["구분"] || "").trim();
       const type = CONTACT_TYPES.includes(typeRaw) ? typeRaw : "조합원";
       const role = String(row["직책"] || "").trim();
-      const stance = String(row["성향"] || "").trim() || "미정";
+      const stance = cleanStance(row["성향"]);
       const levelRaw = String(row["친밀도"] || "").trim();
       const level = CONTACT_LEVELS.includes(levelRaw) ? levelRaw : "하";
       const birthDate = normBirth(row["생년월일"]);
@@ -1348,6 +1384,8 @@ function importMasterRegistryExcel(site, binary) {
   const intimacyStart = findColExact(headerRows, "친밀도");
   const surveyStart = findColExact(headerRows, "설문조사");
   const birthCol = findColByHeader(headerRows, v => v.includes("생년월일"));
+  // "접촉방식/접촉방법" 열이 따로 있으면 날짜 칸에 방식이 없을 때 보조로 사용
+  const methodCol = findColByHeader(headerRows, v => v.includes("접촉방식") || v.includes("접촉방법"));
 
   if ([nameCol, deptCol, roleCol, stanceStart, intimacyStart, unionCheckCol].some(v => v < 0)) {
     alert("필요한 열(No/성명/담당/임대의원/시공사성향/친밀도)을 모두 찾지 못했습니다. 시트 구조가 다른 것 같습니다.");
@@ -1369,17 +1407,31 @@ function importMasterRegistryExcel(site, binary) {
   if (!dateCols.length) { alert("날짜별 접촉 칸을 찾지 못했습니다."); return; }
   const dateHeaderRow = headerRows[dateHeaderRowIdx];
 
-  const stanceLabelRow = headerRows[headerRows.findIndex(r => r && r[stanceStart + 1])] || headerRows[3] || [];
-  const intimacyLabelRow = stanceLabelRow;
-  const isRealLabel = v => {
-    const s = String(v ?? "").trim();
-    return s && !/^-?\d+(\.\d+)?$/.test(s); // 순수 숫자는 라벨이 아니라 잘못 읽힌 데이터일 가능성이 큼
+  // [수정] 성향/친밀도 라벨 줄을 "라벨이 가장 많이 들어있는 줄"로 고름
+  // (예전엔 첫 번째로 값이 있는 줄을 골라서, 날짜·숫자 줄을 라벨로 잘못 읽는 경우가 있었음)
+  const isRealLabel = v => isValidStanceLabel(v);
+  const pickLabelRow = (from, to, ok) => {
+    let best = null, bestCnt = 0;
+    headerRows.forEach(r => {
+      if (!r) return;
+      let cnt = 0;
+      for (let c = from; c < to; c++) if (ok(r[c])) cnt++;
+      if (cnt > bestCnt) { best = r; bestCnt = cnt; }
+    });
+    return best || [];
   };
+  const stanceLabelRow = pickLabelRow(stanceStart + 1, intimacyStart, isRealLabel);
+  const intimacyLabelRow = pickLabelRow(intimacyStart + 1, intimacyEnd, v => CONTACT_LEVELS.includes(String(v ?? "").trim()));
 
-  const backupContacts = site.contacts.slice();
+
+  const backupContacts = JSON.parse(JSON.stringify(site.contacts));
   const backupCompanies = site.companies.slice();
   const existingKeys = new Set(site.contacts.map(c => `${personKey(c)}__${c.date}`));
   let added = 0, peopleTouched = new Set();
+  let methodFilled = 0, methodKnown = 0;
+  const unknownMethodVals = {}; // 인식 못한 날짜칸 값 → 건수 (안내용)
+  const byKeyDate = {};
+  site.contacts.forEach(c => { byKeyDate[`${personKey(c)}__${c.date}`] = c; });
   const personRows = []; // 스냅샷용 (수정 #7)
   let maxContactDate = "";
 
@@ -1401,7 +1453,8 @@ function importMasterRegistryExcel(site, binary) {
     }
     let level = "하";
     for (let c = intimacyStart + 1; c < intimacyEnd; c++) {
-      if (row[c] && isRealLabel(intimacyLabelRow[c])) { level = String(intimacyLabelRow[c]).trim(); break; }
+      const lv = String(intimacyLabelRow[c] ?? "").trim();
+      if (row[c] && CONTACT_LEVELS.includes(lv)) { level = lv; break; }
     }
 
     let personHasContact = false;
@@ -1413,9 +1466,21 @@ function importMasterRegistryExcel(site, binary) {
       const dateStr = formatDateUTC(excelSerialToDate(serial));
       if (dateStr > maxContactDate) maxContactDate = dateStr;
       const key = `${personKey({ name, birthDate })}__${dateStr}`;
-      if (existingKeys.has(key)) return;
+      // [수정] 날짜 칸에 적힌 접촉방식 읽기 (예: 상담, 단순, TM, 거부, 부재)
+      let method = parseMethod(v);
+      if (!method && methodCol >= 0) method = parseMethod(row[methodCol]);
+      if (method) methodKnown++;
+      else { const sv = String(v).trim(); unknownMethodVals[sv] = (unknownMethodVals[sv] || 0) + 1; }
+      if (existingKeys.has(key)) {
+        // 이미 있는 기록인데 접촉방식이 비어 있으면 채워줌 (예전 업로드분 보정)
+        const ex = byKeyDate[key];
+        if (ex && method && ex.method !== method && (!ex.method || ex.source === "import")) { ex.method = method; methodFilled++; }
+        return;
+      }
       existingKeys.add(key);
-      site.contacts.push({ id: uid(), date: dateStr, chajang: dept, name, birthDate, type, role, stance, level, source: "import" });
+      const rec = { id: uid(), date: dateStr, chajang: dept, name, birthDate, type, role, stance, level, method, source: "import" };
+      site.contacts.push(rec);
+      byKeyDate[key] = rec;
       added++;
       personHasContact = true;
     });
@@ -1451,5 +1516,8 @@ function importMasterRegistryExcel(site, binary) {
 
   persist();
   refreshContactViews(site, { companies: true });
-  alert(`"${targetSheet}" 시트 반영 완료\n\n· 새 접촉 기록: ${peopleTouched.size}명, ${added}건${added ? "" : " (이미 반영된 날짜만 있음)"}\n· 성향/친밀도 스냅샷: ${personRows.length}명 (기준일 ${asOf})\n· 이전 대비 성향/친밀도가 바뀐 사람: ${changed}명`);
+  const unk = Object.entries(unknownMethodVals).sort((a, b) => b[1] - a[1]);
+  let methodMsg = `\n· 접촉방식 인식: ${methodKnown}건` + (methodFilled ? ` (기존 기록 ${methodFilled}건 접촉방식 보충)` : "");
+  if (unk.length) methodMsg += `\n· 접촉방식을 알 수 없는 칸 값: ${unk.slice(0, 8).map(([v, n]) => `"${v}" ${n}건`).join(", ")}${unk.length > 8 ? " …" : ""}\n  → 이 값들은 "구분없음"으로 집계됩니다. 각 값이 어떤 방식인지 알려주시면 추가해 드릴게요.`;
+  alert(`"${targetSheet}" 시트 반영 완료\n\n· 새 접촉 기록: ${peopleTouched.size}명, ${added}건${added ? "" : " (이미 반영된 날짜만 있음)"}${methodMsg}\n· 성향/친밀도 스냅샷: ${personRows.length}명 (기준일 ${asOf})\n· 이전 대비 성향/친밀도가 바뀐 사람: ${changed}명`);
 }
