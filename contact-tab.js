@@ -27,7 +27,7 @@ function leaseRoleOf(v) {
   if (!s || /후보|탈락|낙선|당선|사퇴/.test(s)) return "";
   return LEASE_ROLES.find(r => s.includes(r)) ? s : "";
 }
-const CONTACT_TAB_VERSION = "2026-09-30 v24";
+const CONTACT_TAB_VERSION = "2026-09-30 v25";
 
 /* 모든 막대/선 그래프 위에 숫자 값을 표시하는 공통 플러그인 (도넛 차트는 제외) */
 if (typeof Chart !== "undefined" && !Chart._ctValueLabelsRegistered) {
@@ -845,7 +845,7 @@ function buildLeaseOnePageHtml(site, size) {
     return `<div class="br"><div class="bn">${esc(n)}</div>
       <div class="bts"><div class="bt">${seg("good", s.good)}${seg("refuse", s.refuse)}${seg("absent", s.absent)}${seg("none", s.none)}</div>
         <div class="bt wkb"><i style="width:${s.wk / maxT * 100}%;background:#8fb8e3">${s.wk && s.wk / maxT >= 0.09 ? s.wk : ""}</i></div></div>
-      <div class="bv"><b>${s.good}</b>/${s.total}<small>${pctN(s.good, s.total)}%</small><br><span class="wkv">주차 ${s.wk}</span></div></div>`;
+      <div class="bv"><b>${s.good}</b>/${s.total}<small>${pctN(s.good, s.total)}%</small><span class="wkv"> · 주${s.wk}</span></div></div>`;
   }).join("");
 
   // ③ 주차별 막대 (임대의원 접촉 인원)
@@ -895,7 +895,7 @@ function buildLeaseOnePageHtml(site, size) {
   .main { flex: 1; display: grid; grid-template-columns: 33% 1fr; grid-template-rows: minmax(0, 1fr); gap: 12px; min-height: 0; }
   .left { display: flex; flex-direction: column; gap: 7px; min-height: 0; overflow: hidden; }
   .left > .box { display: flex; flex-direction: column; }
-  .left > .box.grow { flex: 1 1 auto; min-height: 0; }
+  .left > .box.grow { flex: 1 1 auto; }
   .left > .box.grow .fill { flex: 1; display: flex; flex-direction: column; justify-content: space-evenly; }
   .left > .box.grow .wk { flex: 1; height: auto; min-height: 20mm; }
   .right { overflow: hidden; }
@@ -909,7 +909,7 @@ function buildLeaseOnePageHtml(site, size) {
   .k.r .v { color: #b42318; }
   .legend { display: flex; gap: 10px; font-size: 7pt; color: #4b5563; margin-top: 4px; }
   .legend em { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 3px; vertical-align: -1px; }
-  .br { display: grid; grid-template-columns: 13mm 1fr 17mm; align-items: center; gap: 6px; margin-bottom: 3px; }
+  .br { display: grid; grid-template-columns: 13mm 1fr 22mm; align-items: center; gap: 6px; margin-bottom: 3px; }
   .bts { display: flex; flex-direction: column; gap: 1.5px; }
   .bt { height: 10px; }
   .bt.wkb { height: 5px; background: transparent; }
@@ -998,10 +998,17 @@ function buildLeaseOnePageHtml(site, size) {
 </div>
 <script>
 /* 명단이 한 장에 다 들어가도록 글자 크기·열 수 자동 조절 */
+function fitLeft() {
+  var L = document.querySelector(".left"); if (!L) return;
+  function over() { if (L.scrollHeight > L.clientHeight + 1) return true;
+    for (var i = 0; i < L.children.length; i++) { var b = L.children[i]; if (b.scrollHeight > b.clientHeight + 1) return true; } return false; }
+  var z = 1; L.style.zoom = 1;
+  while (over() && z > 0.6) { z -= 0.03; L.style.zoom = z; }
+}
+window.addEventListener("beforeprint", fitLeft);
 (function () {
   // 왼쪽(그래프): 넘치면 전체를 조금씩 축소
-  var L = document.querySelector(".left");
-  if (L) { var z = 1; while (L.scrollHeight > L.clientHeight + 1 && z > 0.72) { z -= 0.03; L.style.zoom = z; } }
+  fitLeft();
   var c = document.querySelector(".cards"); if (!c) return;
   var fs = 7.4, cols = 3, g = 0;
   function over() { return c.scrollWidth > c.clientWidth + 1 || c.scrollHeight > c.clientHeight + 1; }
@@ -1178,7 +1185,7 @@ function buildOnePageReportHtml(site, size) {
   .main { flex: 1; display: grid; grid-template-columns: ${single ? "36%" : "34%"} 1fr; grid-template-rows: minmax(0, 1fr); gap: 12px; min-height: 0; }
   .left { display: flex; flex-direction: column; gap: 7px; min-height: 0; overflow: hidden; }
   .left > .box { display: flex; flex-direction: column; }
-  .left > .box.grow { flex: 1 1 auto; min-height: 0; }
+  .left > .box.grow { flex: 1 1 auto; }
   .left > .box.grow .fill { flex: 1; display: flex; flex-direction: column; justify-content: space-evenly; min-height: 0; }
   .left > .box.grow .wk { flex: 1; height: auto; min-height: 24mm; }
   .right { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
@@ -1247,9 +1254,16 @@ function buildOnePageReportHtml(site, size) {
 </div>
 <script>
 var HEADW = ${JSON.stringify(W.map(w => `<span class="w">${w}</span>`).join(""))};
+function fitLeft() {
+  var L = document.querySelector(".left"); if (!L) return;
+  function over() { if (L.scrollHeight > L.clientHeight + 1) return true;
+    for (var i = 0; i < L.children.length; i++) { var b = L.children[i]; if (b.scrollHeight > b.clientHeight + 1) return true; } return false; }
+  var z = 1; L.style.zoom = 1;
+  while (over() && z > 0.6) { z -= 0.03; L.style.zoom = z; }
+}
+window.addEventListener("beforeprint", fitLeft);
 (function () {
-  var L = document.querySelector(".left"), z = 1;
-  while (L && L.scrollHeight > L.clientHeight + 1 && z > 0.7) { z -= 0.03; L.style.zoom = z; }
+  fitLeft();
   var R = document.querySelector(".right"), zr = 1;
   var P = document.querySelector(".plist");
   function head(n) {
