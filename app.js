@@ -697,11 +697,13 @@ function renderStatsBar() {
 }
 
 function renderUpcoming() {
-  const now = new Date();
-  const in3mo = new Date(now); in3mo.setMonth(in3mo.getMonth() + 3);
+  // 오늘부터 2개월 이내 일정 (날짜 문자열로 비교해서 오늘 일정도 포함)
+  const today = todayStr();
+  const end = new Date(); end.setMonth(end.getMonth() + 2);
+  const endStr = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, "0")}-${String(end.getDate()).padStart(2, "0")}`;
   const scoped = regionScopedSites();
   const upcoming = scoped
-    .filter(s => s.nextEventDate && new Date(s.nextEventDate) >= now && new Date(s.nextEventDate) <= in3mo)
+    .filter(s => s.nextEventDate && String(s.nextEventDate).slice(0, 10) >= today && String(s.nextEventDate).slice(0, 10) <= endStr)
     .sort((a, b) => new Date(a.nextEventDate) - new Date(b.nextEventDate));
 
   const badge = document.getElementById("upcomingBadge");
