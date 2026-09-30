@@ -20,6 +20,7 @@ const DEFAULT_EVENT_TYPES = ["투어", "간담회", "설문조사"];
 const EVENT_COLORS = ["#378add", "#d85a30", "#1d9e75", "#8b5cf6", "#f59e0b"];
 const PERIOD_MODES = [["day", "일별"], ["week", "주별"], ["month", "월별"]];
 const REGISTRY_PARSER_VERSION = 3;
+const CONTACT_TAB_VERSION = "2026-09-30 v6";
 
 /* 모든 막대/선 그래프 위에 숫자 값을 표시하는 공통 플러그인 (도넛 차트는 제외) */
 if (typeof Chart !== "undefined" && !Chart._ctValueLabelsRegistered) {
@@ -312,7 +313,8 @@ function renderContactTab(site) {
   if (state.selectedChajang === null) state.selectedChajang = new Set();
 
   panel.innerHTML = `
-    <div class="detail-card" style="display:flex;justify-content:flex-end;gap:6px">
+    <div class="detail-card" style="display:flex;justify-content:flex-end;align-items:center;gap:6px">
+      <span style="margin-right:auto;font-size:11px;color:var(--slate-500)">접촉현황 버전 ${CONTACT_TAB_VERSION}</span>
       <button id="ctPrintA4" class="btn btn-outline btn-sm">🖨 A4로 인쇄</button>
       <button id="ctPrintA3" class="btn btn-outline btn-sm">🖨 A3로 인쇄</button>
     </div>
