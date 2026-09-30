@@ -27,7 +27,7 @@ function leaseRoleOf(v) {
   if (!s || /후보|탈락|낙선|당선|사퇴/.test(s)) return "";
   return LEASE_ROLES.find(r => s.includes(r)) ? s : "";
 }
-const CONTACT_TAB_VERSION = "2026-09-30 v14";
+const CONTACT_TAB_VERSION = "2026-09-30 v15";
 
 /* 모든 막대/선 그래프 위에 숫자 값을 표시하는 공통 플러그인 (도넛 차트는 제외) */
 if (typeof Chart !== "undefined" && !Chart._ctValueLabelsRegistered) {
@@ -1357,7 +1357,7 @@ function renderWeeklyPersonSection(site) {
         <thead><tr style="border-bottom:1px solid var(--slate-300)">
           <th style="text-align:left;padding:5px 4px;color:var(--slate-500)">담당</th>
           ${W.map((w, i) => `<th style="${thS}">${wkLabel(i)}<div style="font-weight:400;font-size:10.5px">${wkRange(i)}</div></th>`).join("")}
-          <th style="${thS}">이 달 인원</th>
+          <th style="${thS}" title="이 달에 한 번이라도 접촉한 사람 수 (여러 번 만나도 1명)">${Number((state.selectedWeeklyMonth || "").slice(5, 7)) || ""}월 실접촉 인원<div style="font-weight:400;font-size:10.5px">중복 제외</div></th>
           ${regDates.length ? `<th style="${thS}" title="명부 BB열(주차접촉)이 상담·단순·TM인 인원">BB 주차접촉<div style="font-weight:400;font-size:10.5px">${regDates[regDates.length - 1]}</div></th>` : ""}
         </tr></thead>
         <tbody>
