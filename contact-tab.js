@@ -27,7 +27,7 @@ function leaseRoleOf(v) {
   if (!s || /후보|탈락|낙선|당선|사퇴/.test(s)) return "";
   return LEASE_ROLES.find(r => s.includes(r)) ? s : "";
 }
-const CONTACT_TAB_VERSION = "2026-09-30 v17";
+const CONTACT_TAB_VERSION = "2026-09-30 v18";
 
 /* 모든 막대/선 그래프 위에 숫자 값을 표시하는 공통 플러그인 (도넛 차트는 제외) */
 if (typeof Chart !== "undefined" && !Chart._ctValueLabelsRegistered) {
@@ -251,7 +251,7 @@ function groupLabel(key, mode) {
 }
 
 function contactStateFor(siteId) {
-  if (!_contactState[siteId]) _contactState[siteId] = { selectedChajang: null, period: "month", selectedStatMonth: null, selectedWeeklyMonth: null };
+  if (!_contactState[siteId]) _contactState[siteId] = { selectedChajang: null, targetType: "", period: "month", selectedStatMonth: null, selectedWeeklyMonth: null };
   return _contactState[siteId];
 }
 
@@ -393,7 +393,9 @@ function cloneTableHtml(el) {
 
 /* 차장 한 명 출력용: 그 차장이 맡은 조합원 명단 (명부 기준 + 이 달 주차별 접촉) */
 function buildPersonListHtml(site, chajang, regDate, weekMonth) {
-  const regs = registryRows(site, regDate, true).filter(x => (x.chajang || "(담당 미지정)") === chajang);
+  const tt = contactStateFor(site.id).targetType;
+  const regs = registryRows(site, regDate, true).filter(x => (x.chajang || "(담당 미지정)") === chajang &&
+    (!tt || (tt === "임대의원" ? x.type === "임대의원" : x.type !== "임대의원")));
   const ranges = weekRangesOfMonth(weekMonth);
   const W = ranges.map((_, i) => i + 1);
   const weeksByKey = {};
@@ -411,7 +413,7 @@ function buildPersonListHtml(site, chajang, regDate, weekMonth) {
     site.contacts.filter(c => (c.chajang || "(담당 미지정)") === chajang && c.name).forEach(c => {
       m[personKey(c)] = { key: personKey(c), type: c.type, role: c.role, cum: c.method || "-", week: "-", stance: c.stance, level: c.level };
     });
-    people = Object.values(m);
+    people = Object.values(m).filter(p => !tt || (tt === "임대의원" ? p.type === "임대의원" : p.type !== "임대의원"));
   }
   const order = s => { const i = REG_STATUS.indexOf(s); return i < 0 ? 99 : i; };
   people.sort((a, b) => (a.type === "임대의원" ? 0 : 1) - (b.type === "임대의원" ? 0 : 1) || order(a.cum) - order(b.cum) || a.key.localeCompare(b.key));
@@ -490,7 +492,8 @@ function buildContactReportHtml(site, size) {
   const pctN = (a, b) => b ? Math.round(a / b * 1000) / 10 : 0;
   const pct = (a, b) => b ? `${pctN(a, b)}%` : "-";
   const GOOD = ["상담", "단순상담", "TM"];
-  const who = single ? `${single} 차장` : "전체 담당";
+  const who = (single ? `${single} 차장` : "전체 담당") + (state.targetType ? ` · ${targetLabel(state)}` : "");
+  const tgt = targetLabel(state);
 
   // ---- 담당별 집계 ----
   const rows = regDates.length ? registryRows(site, regDate) : [];
@@ -506,7 +509,7 @@ function buildContactReportHtml(site, size) {
   const sum = { name: "합계", total: 0, lease: 0, c: {}, wGood: 0 };
   glist.forEach(g => { sum.total += g.total; sum.lease += g.lease; sum.wGood += g.wGood; REG_STATUS.forEach(k => sum.c[k] = (sum.c[k] || 0) + (g.c[k] || 0)); });
   const good = g => GOOD.reduce((s, k) => s + (g.c[k] || 0), 0);
-  const bar = (v, color) => `<div class="bar"><i style="width:${Math.min(100, v)}%;background:${color}"></i><b>${v}%</b></div>`;
+  const bar = (v, color) => `<div class="bar"><i style="width:${Math.min(100, v)}%;background:${color}"></i><b style="${v >= 82 ? "color:#fff" : ""}">${v}%</b></div>`;
   const regRow = (g, cls) => `<tr class="${cls || ""}">
     <td class="nm">${esc(g.name)}</td><td>${g.total}</td>
     <td>${g.c["상담"] || 0}</td><td>${g.c["단순상담"] || 0}</td><td>${g.c["TM"] || 0}</td>
@@ -578,7 +581,7 @@ function buildContactReportHtml(site, size) {
 
   const plist = single ? buildPersonListHtml(site, single, regDate, weekMonth) : null;
   const kpi = sum.total ? [
-    { l: single ? "담당 조합원" : "조합원", v: fmtNum(sum.total), u: "명", s: `임대의원 ${sum.lease}명` },
+    { l: tgt ? (single ? `담당 ${tgt}` : tgt) : (single ? "담당 조합원" : "조합원"), v: fmtNum(sum.total), u: "명", s: state.targetType === "임대의원" ? `조합장·감사·이사·대의원` : `임대의원 ${sum.lease}명` },
     { l: "누계 접촉", v: fmtNum(good(sum)), u: "명", s: `접촉률 ${pct(good(sum), sum.total)}`, p: pctN(good(sum), sum.total) },
     { l: "주차 접촉", v: fmtNum(sum.wGood), u: "명", s: `접촉률 ${pct(sum.wGood, sum.total)}`, p: pctN(sum.wGood, sum.total) },
     { l: `${monthNo}월 실접촉`, v: fmtNum(wk.tot.all.size), u: "명", s: `접촉 ${wk.tot.cnt}건` },
@@ -670,7 +673,7 @@ function buildContactReportHtml(site, size) {
 </style></head><body>
 
 <div class="page">
-  ${band("조합원 접촉현황 보고")}
+  ${band(`${tgt || "조합원"} 접촉현황 보고`)}
   ${kpiHtml}
   <h2>${single ? "접촉현황" : "담당별 접촉현황"}</h2>
   ${regTable}
@@ -685,7 +688,7 @@ function buildContactReportHtml(site, size) {
 
 ${single ? `
 <div class="page">
-  ${band(`담당 조합원 명단 · ${plist.count}명 (임대의원 ${plist.lease}명)`, "", true)}
+  ${band(`담당 ${tgt || "조합원"} 명단 · ${plist.count}명${state.targetType ? "" : ` (임대의원 ${plist.lease}명)`}`, "", true)}
   ${plist.html}
   <div class="foot"><span>누계·주차: 명부 기준 접촉 상태 · 1~5주: ${monthNo}월 주차별 접촉 건수</span><span>출력 ${printedAt} · 2 / 2</span></div>
 </div>` : `
@@ -768,7 +771,14 @@ function renderContactTab(site) {
           <button id="ctMergeGo" class="btn btn-primary btn-sm">합치기</button>
         </div>
       </div>
-      <div id="ctChajangPills" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+        <span style="font-size:12px;font-weight:700;color:var(--slate-500);margin-right:2px">대상</span>
+        <div id="ctTargetPills" style="display:flex;gap:6px"></div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:flex-start">
+        <span style="font-size:12px;font-weight:700;color:var(--slate-500);margin:5px 2px 0 0;white-space:nowrap">담당</span>
+        <div id="ctChajangPills" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+      </div>
     </div>
 
     <div class="detail-card">
@@ -947,6 +957,7 @@ function renderContactTab(site) {
   renderCompanyTags(site);
   renderContactTable(site);
   renderEventTable(site);
+  renderTargetPills(site);
   renderRegistryStatusSection(site);
   renderMonthlyStatSection(site);
   renderWeeklyPersonSection(site);
@@ -983,6 +994,19 @@ function bindMergePanel(site) {
 }
 
 /* ---------- 차장 필터 ---------- */
+function renderTargetPills(site) {
+  const box = document.getElementById("ctTargetPills");
+  if (!box) return;
+  const state = contactStateFor(site.id);
+  const opts = [["", "전체"], ["임대의원", "임대의원만"], ["조합원", "일반 조합원만"]];
+  box.innerHTML = opts.map(([v, l]) => `<button class="btn ${state.targetType === v ? "btn-primary" : "btn-outline"} btn-sm ct-target" data-v="${v}">${l}</button>`).join("");
+  box.querySelectorAll(".ct-target").forEach(b => b.onclick = () => {
+    state.targetType = b.dataset.v;
+    renderTargetPills(site);
+    refreshContactViews(site);
+  });
+}
+
 function renderChajangPills(site) {
   const box = document.getElementById("ctChajangPills");
   const state = contactStateFor(site.id);
@@ -1030,8 +1054,12 @@ function renderPeriodPills(site) {
 
 function selectedContacts(site) {
   const state = contactStateFor(site.id);
-  if (!state.selectedChajang.size) return site.contacts;
-  return site.contacts.filter(c => state.selectedChajang.has(c.chajang));
+  return site.contacts.filter(c =>
+    (!state.selectedChajang.size || state.selectedChajang.has(c.chajang)) &&
+    (!state.targetType || (state.targetType === "임대의원" ? c.type === "임대의원" : c.type !== "임대의원")));
+}
+function targetLabel(state) {
+  return state.targetType === "임대의원" ? "임대의원" : state.targetType === "조합원" ? "일반 조합원" : "";
 }
 
 /* ---------- 시공사 목록 ---------- */
@@ -1190,7 +1218,8 @@ function registryRows(site, date, ignoreFilter) {
   const raw = (site.registryStats || {})[date] || [];
   return raw.map(r => ({ chajang: r[0], type: r[1] ? "임대의원" : "조합원", cumMethod: REG_STATUS[r[2]] || "미접촉", weekMethod: REG_STATUS[r[3]] || "미접촉",
       key: r[4] || "", role: r[5] || "", stance: r[6] || "", level: r[7] || "" }))
-    .filter(x => ignoreFilter || !state.selectedChajang.size || state.selectedChajang.has(x.chajang));
+    .filter(x => ignoreFilter || ((!state.selectedChajang.size || state.selectedChajang.has(x.chajang)) &&
+      (!state.targetType || (state.targetType === "임대의원" ? x.type === "임대의원" : x.type !== "임대의원"))));
 }
 
 function renderRegistryStatusSection(site) {
