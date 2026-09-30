@@ -59,17 +59,70 @@ function ensureContactData(site) {
   site.contacts = site.contacts || [];
   site.companies = site.companies || ["포스코"];
   site.specialEvents = site.specialEvents || [];
+  site.stanceSnapshots = site.stanceSnapshots || [];
+
+  // [수정 #7] 예전 버전에서 엑셀로 들어온 기록(접촉방법 칸이 없고 직책 칸이 있는 기록)은
+  // "업로드 당시 현재 성향을 과거 날짜에 복사한 값"이므로 성향/친밀도 변화 계산에서 제외하도록 표시합니다.
+  let migrated = false;
+  site.contacts.forEach(c => {
+    if (c.source) return;
+    c.source = (!("method" in c) && ("role" in c)) ? "import" : "manual";
+    migrated = true;
+  });
+  // 기존 데이터에 스냅샷이 하나도 없으면, 사람별 가장 최근 기록 1건을 최초 스냅샷으로 만들어 둡니다.
+  if (!site.stanceSnapshots.length && site.contacts.some(c => c.source === "import")) {
+    const latest = {};
+    site.contacts.filter(c => c.source === "import" && c.name && c.date).forEach(c => {
+      const k = personKey(c);
+      if (!latest[k] || latest[k].date < c.date) latest[k] = c;
+    });
+    Object.values(latest).forEach(c => site.stanceSnapshots.push({
+      id: uid(), date: c.date, name: c.name, birthDate: c.birthDate || "", chajang: c.chajang || "",
+      type: c.type, role: c.role || "", stance: c.stance || "미정", level: c.level || "하"
+    }));
+    migrated = true;
+  }
+  if (migrated) persist();
+}
+
+/* [수정 #12] 동명이인 구분: 이름 + 생년월일(있을 때) */
+function personKey(c) {
+  return `${(c.name || "").trim()}|${(c.birthDate || "").trim()}`;
+}
+function personLabel(c, allRecords) {
+  if (!c.birthDate) return c.name;
+  const same = allRecords.some(o => o.name === c.name && (o.birthDate || "") !== (c.birthDate || ""));
+  return same ? `${c.name}(${c.birthDate})` : c.name;
+}
+
+/* 엑셀 날짜 값(일련번호/문자열/Date)을 YYYY-MM-DD로 통일 */
+function normalizeDateValue(v) {
+  if (v === null || v === undefined || v === "") return "";
+  if (v instanceof Date && !isNaN(v)) return formatDateLocal(v);
+  if (typeof v === "number" && v > 20000 && v < 80000) return formatDateUTC(excelSerialToDate(v));
+  const s = String(v).trim();
+  if (/^\d{5}(\.\d+)?$/.test(s)) return normalizeDateValue(Number(s));
+  const m = s.match(/^(\d{4})[.\-\/년\s]+(\d{1,2})[.\-\/월\s]+(\d{1,2})/);
+  if (m) return `${m[1]}-${pad2(m[2])}-${pad2(m[3])}`;
+  return s;
+}
+function isValidDateStr(s) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(s || "");
 }
 
 function monthKeyOf(dateStr) {
   return (dateStr || "").slice(0, 7);
+}
+function monthEndOf(monthKey) {
+  const [y, m] = monthKey.split("-").map(Number);
+  return `${monthKey}-${pad2(new Date(y, m, 0).getDate())}`;
 }
 function weekKeyOf(dateStr) {
   if (!dateStr) return "";
   const d = new Date(dateStr + "T00:00:00");
   const day = (d.getDay() + 6) % 7;
   d.setDate(d.getDate() - day);
-  return d.toISOString().slice(0, 10);
+  return formatDateLocal(d); // [수정 #1] toISOString()은 UTC로 바뀌어 한국시간에서 하루 밀림
 }
 function groupKeyOf(dateStr, mode) {
   if (mode === "day") return dateStr || "";
@@ -94,6 +147,66 @@ function destroyContactCharts(siteId) {
   delete _contactCharts[siteId];
 }
 
+/* [수정 #3, #13] 데이터가 바뀌면 탭 안의 모든 표·그래프를 한 번에 다시 그림 */
+function refreshContactViews(site, opts = {}) {
+  renderChajangPills(site);
+  if (opts.table !== false) renderContactTable(site);
+  if (opts.companies) renderCompanyTags(site);
+  if (opts.events) renderEventTable(site);
+  renderMonthlyStatSection(site);
+  renderWeeklyPersonSection(site);
+  rebuildContactCharts(site);
+}
+
+/* 게스트는 표를 볼 수만 있고 수정은 못 하도록 (수정 #9) */
+function roAttr() {
+  return (typeof isAdmin !== "undefined" && isAdmin) ? "" : "disabled";
+}
+
+/* =========================================================
+   성향/친밀도 "관측값" (수정 #7)
+   - 직접 입력한 기록(manual) + 업로드 시점 스냅샷(stanceSnapshots)만 사용
+   - 엑셀에서 날짜별로 풀어 넣은 기록(import/weekly)은 "현재 값을 과거로 복사"한
+     것이라 변화 계산에서 제외
+   ========================================================= */
+function observationsFor(site, contacts) {
+  const keys = new Set(contacts.map(personKey));
+  const obs = [];
+  contacts.forEach(c => {
+    if (c.source === "manual" && c.name && isValidDateStr(c.date)) {
+      obs.push({ key: personKey(c), date: c.date, stance: c.stance || "미정", level: c.level || "하" });
+    }
+  });
+  site.stanceSnapshots.forEach(s => {
+    const k = personKey(s);
+    if (keys.has(k) && isValidDateStr(s.date)) obs.push({ key: k, date: s.date, stance: s.stance || "미정", level: s.level || "하" });
+  });
+  // 관측값이 전혀 없는 사람은 최근 기록 값으로 대체
+  const hasObs = new Set(obs.map(o => o.key));
+  const fallback = {};
+  contacts.forEach(c => {
+    const k = personKey(c);
+    if (!c.name || hasObs.has(k)) return;
+    if (!fallback[k] || (fallback[k].date || "") < (c.date || "")) fallback[k] = c;
+  });
+  Object.entries(fallback).forEach(([k, c]) => obs.push({ key: k, date: c.date || "", stance: c.stance || "미정", level: c.level || "하" }));
+
+  const byKey = {};
+  obs.forEach((o, i) => { o.pri = i; (byKey[o.key] = byKey[o.key] || []).push(o); });
+  Object.keys(byKey).forEach(k => {
+    // 같은 날짜에 여러 값이 있으면 직접 입력한 기록(먼저 push됨)을 우선하고 하나만 남김
+    const seen = new Map();
+    byKey[k].forEach(o => { if (!seen.has(o.date) || seen.get(o.date).pri > o.pri) seen.set(o.date, o); });
+    byKey[k] = [...seen.values()].sort((a, b) => a.date.localeCompare(b.date));
+  });
+  return byKey;
+}
+function stateAsOf(list, dateStr) {
+  let cur = null;
+  for (const o of list) { if (o.date <= dateStr) cur = o; else break; }
+  return cur;
+}
+
 /* ---------- 인쇄 ---------- */
 function printContactTab(size) {
   let styleTag = document.getElementById("ctPrintPageSize");
@@ -115,6 +228,8 @@ function printContactTab(size) {
 
 /* ---------- 메인 렌더 ---------- */
 function renderContactTab(site) {
+  // 다른 현장에서 만든 그래프가 남아있지 않도록 정리
+  Object.keys(_contactCharts).forEach(destroyContactCharts);
   ensureContactData(site);
   const panel = document.querySelector('#siteDetailPanel [data-panel="contact"]');
   if (!panel) return;
@@ -148,7 +263,7 @@ function renderContactTab(site) {
         <h4>월별 담당자 접촉현황 집계 (전체 명부/명단 데이터에서 자동 계산)</h4>
         <select id="ctStatMonthSelect" style="border:1px solid var(--slate-300);border-radius:6px;padding:5px 8px;font-size:12px"></select>
       </div>
-      <p class="hint" style="margin-bottom:10px">별도 업로드 없이, 위에서 이미 올리신 접촉 기록에서 자동으로 계산돼요. (단, "전체 명부 업로드"로 들어온 기록은 접촉방법 구분이 원본에 없어서 상담/단순상담/TM은 0으로 나올 수 있어요 — 인원수·총 건수는 항상 정확해요.)</p>
+      <p class="hint" style="margin-bottom:10px">위 차장 선택이 그대로 적용됩니다. "전체 명부 업로드"로 들어온 기록은 원본에 접촉방법 구분이 없어서 회색 <b>구분없음</b>으로 표시되고, 그 달 기록이 전부 명부 데이터면 <b>인원·총 건수</b> 그래프로 바뀌어요.</p>
       <div style="position:relative;height:220px;margin-bottom:14px"><canvas id="ctMonthlyStatChart"></canvas></div>
       <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse;font-size:12px">
@@ -172,7 +287,7 @@ function renderContactTab(site) {
 
     <div class="detail-card">
       <div class="detail-card-head">
-        <h4>인원별 주차별 접촉 현황</h4>
+        <h4>인원별 주차별 접촉 현황 <span class="hint" style="font-weight:400">(1주=1~7일, 2주=8~14일 … 5주=29일~말일)</span></h4>
         <select id="ctWeeklyMonthSelect" style="border:1px solid var(--slate-300);border-radius:6px;padding:5px 8px;font-size:12px"></select>
       </div>
       <div id="ctWeeklyMetrics" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px"></div>
@@ -196,7 +311,7 @@ function renderContactTab(site) {
 
     <div class="detail-card">
       <div class="detail-card-head">
-        <h4>개별 접촉 인원 추이</h4>
+        <h4>개별 접촉 인원 추이 <span class="hint" style="font-weight:400">(기간 내 중복 제외 인원)</span></h4>
         <div id="ctPeriodPills" style="display:flex;gap:6px"></div>
       </div>
       <div style="position:relative;height:220px"><canvas id="ctContactChart"></canvas></div>
@@ -213,13 +328,14 @@ function renderContactTab(site) {
     </div>
 
     <div class="detail-card">
-      <div class="detail-card-head"><h4>시공사 지지 성향 변화 추이 (월별)</h4></div>
+      <div class="detail-card-head"><h4>시공사 지지 성향 변화 추이 (월말 기준, 인원 비율)</h4></div>
       <div style="position:relative;height:210px"><canvas id="ctSentimentChart"></canvas></div>
     </div>
 
     <div class="detail-card">
       <div class="detail-card-head"><h4>친밀도 변화 집계 (최초 → 최근)</h4></div>
-      <div id="ctIntimacyBoxes" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px"></div>
+      <p class="hint" style="margin:-4px 0 10px">성향·친밀도 변화는 직접 입력한 기록과 "전체 명부 업로드" 때마다 저장되는 스냅샷으로 계산합니다. 명부를 주기적으로 올리면 변화가 쌓여요.</p>
+      <div id="ctIntimacyBoxes" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px"></div>
       <div style="position:relative;height:190px"><canvas id="ctIntimacyChart"></canvas></div>
     </div>
 
@@ -322,10 +438,7 @@ function renderChajangPills(site) {
       const name = btn.dataset.name;
       if (!name) state.selectedChajang.clear();
       else state.selectedChajang = new Set([name]);
-      renderChajangPills(site);
-      rebuildContactCharts(site);
-      renderContactTable(site);
-      renderWeeklyPersonSection(site);
+      refreshContactViews(site); // [수정 #4] 월별 담당자 집계까지 함께 필터
     });
   });
 }
@@ -369,12 +482,14 @@ function renderCompanyTags(site) {
       persist();
       renderCompanyTags(site);
       renderContactTable(site);
+      rebuildContactCharts(site);
     });
   });
 }
 
 function stanceOptionsHtml(site, val) {
   const opts = [...site.companies, "미정"];
+  if (val && !opts.includes(val)) opts.splice(opts.length - 1, 0, val); // 목록에서 삭제된 시공사 값도 그대로 보이게
   return opts.map(o => `<option ${o === val ? "selected" : ""}>${esc(o)}</option>`).join("");
 }
 
@@ -382,52 +497,61 @@ function stanceOptionsHtml(site, val) {
 function renderContactTable(site) {
   const body = document.getElementById("ctContactBody");
   const rows = selectedContacts(site).slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const ro = roAttr();
+  const inp = "border:1px solid var(--slate-300);border-radius:5px;padding:3px 5px;font-size:12px";
+  const sel = "border:1px solid var(--slate-300);border-radius:5px;padding:3px 4px;font-size:12px";
 
   body.innerHTML = rows.map(c => `
-    <tr data-id="${c.id}" style="border-bottom:1px solid var(--slate-100)">
-      <td style="padding:5px 4px"><input type="date" class="ct-date" value="${c.date || ""}" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 5px;font-size:12px"></td>
-      <td style="padding:5px 4px"><input type="text" class="ct-name" value="${esc(c.name || "")}" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 5px;font-size:12px;width:64px"></td>
-      <td style="padding:5px 4px"><input type="text" class="ct-chajang" value="${esc(c.chajang || "")}" placeholder="담당차장" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 5px;font-size:12px;width:64px"></td>
-      <td style="padding:5px 4px"><select class="ct-type" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 4px;font-size:12px">
+    <tr data-id="${esc(c.id)}" style="border-bottom:1px solid var(--slate-100)">
+      <td style="padding:5px 4px"><input type="date" class="ct-date" value="${isValidDateStr(c.date) ? c.date : ""}" ${ro} style="${inp}${isValidDateStr(c.date) ? "" : ";border-color:#e34948"}" title="${isValidDateStr(c.date) ? "" : "날짜 형식 오류: " + esc(c.date || "비어있음")}"></td>
+      <td style="padding:5px 4px"><input type="text" class="ct-name" value="${esc(c.name || "")}" ${ro} style="${inp};width:64px"></td>
+      <td style="padding:5px 4px"><input type="text" class="ct-chajang" value="${esc(c.chajang || "")}" placeholder="담당차장" ${ro} style="${inp};width:64px"></td>
+      <td style="padding:5px 4px"><select class="ct-type" ${ro} style="${sel}">
         ${CONTACT_TYPES.map(t => `<option ${t === c.type ? "selected" : ""}>${t}</option>`).join("")}
       </select></td>
-      <td style="padding:5px 4px"><select class="ct-role" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 4px;font-size:12px">
-        ${ROLE_OPTIONS.map(r => `<option value="${esc(r)}" ${r === (c.role || "") ? "selected" : ""}>${r || "-"}</option>`).join("")}
+      <td style="padding:5px 4px"><select class="ct-role" ${ro} style="${sel}">
+        ${ROLE_OPTIONS.concat(c.role && !ROLE_OPTIONS.includes(c.role) ? [c.role] : []).map(r => `<option value="${esc(r)}" ${r === (c.role || "") ? "selected" : ""}>${esc(r) || "-"}</option>`).join("")}
       </select></td>
-      <td style="padding:5px 4px"><select class="ct-method" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 4px;font-size:12px">
+      <td style="padding:5px 4px"><select class="ct-method" ${ro} style="${sel}">
         ${CONTACT_METHODS.map(m => `<option value="${esc(m)}" ${m === (c.method || "") ? "selected" : ""}>${m || "-"}</option>`).join("")}
       </select></td>
-      <td style="padding:5px 4px"><select class="ct-stance" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 4px;font-size:12px">
+      <td style="padding:5px 4px"><select class="ct-stance" ${ro} style="${sel}">
         ${stanceOptionsHtml(site, c.stance)}
       </select></td>
-      <td style="padding:5px 4px"><select class="ct-level" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 4px;font-size:12px">
+      <td style="padding:5px 4px"><select class="ct-level" ${ro} style="${sel}">
         ${CONTACT_LEVELS.map(l => `<option ${l === c.level ? "selected" : ""}>${l}</option>`).join("")}
       </select></td>
-      <td style="padding:5px 4px"><input type="text" class="ct-note" value="${esc(c.note || "")}" placeholder="특이사항" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 5px;font-size:12px;width:100px"></td>
+      <td style="padding:5px 4px"><input type="text" class="ct-note" value="${esc(c.note || "")}" placeholder="특이사항" ${ro} style="${inp};width:100px"></td>
       <td style="padding:5px 4px"><button class="ct-del admin-only" style="border:none;background:none;color:var(--slate-300);cursor:pointer">✕</button></td>
     </tr>`).join("") || `<tr><td colspan="10" style="padding:14px 4px;color:var(--slate-500)">표시할 접촉 기록이 없습니다.</td></tr>`;
+
+  if (ro) return; // 게스트는 보기 전용
 
   body.querySelectorAll("tr[data-id]").forEach(row => {
     const id = row.dataset.id;
     const contact = site.contacts.find(c => c.id === id);
     if (!contact) return;
-    row.querySelector(".ct-date").addEventListener("change", e => { contact.date = e.target.value; persist(); rebuildContactCharts(site); renderChajangPills(site); renderWeeklyPersonSection(site); });
-    row.querySelector(".ct-name").addEventListener("change", e => { contact.name = e.target.value.trim(); persist(); });
-    row.querySelector(".ct-chajang").addEventListener("change", e => { contact.chajang = e.target.value.trim(); persist(); renderChajangPills(site); rebuildContactCharts(site); renderWeeklyPersonSection(site); });
-    row.querySelector(".ct-type").addEventListener("change", e => { contact.type = e.target.value; persist(); rebuildContactCharts(site); renderWeeklyPersonSection(site); });
-    row.querySelector(".ct-role").addEventListener("change", e => { contact.role = e.target.value; persist(); renderWeeklyPersonSection(site); });
-    row.querySelector(".ct-method").addEventListener("change", e => { contact.method = e.target.value; persist(); rebuildContactCharts(site); });
-    row.querySelector(".ct-stance").addEventListener("change", e => { contact.stance = e.target.value; persist(); rebuildContactCharts(site); });
-    row.querySelector(".ct-level").addEventListener("change", e => { contact.level = e.target.value; persist(); rebuildContactCharts(site); });
+    const upd = (field, val, tableToo) => {
+      contact[field] = val;
+      persist();
+      refreshContactViews(site, { table: !!tableToo });
+    };
+    row.querySelector(".ct-date").addEventListener("change", e => upd("date", e.target.value));
+    row.querySelector(".ct-name").addEventListener("change", e => upd("name", e.target.value.trim()));
+    // 담당 변경 시 필터에서 빠질 수 있으므로 표도 다시 그림
+    row.querySelector(".ct-chajang").addEventListener("change", e => upd("chajang", e.target.value.trim(), true));
+    row.querySelector(".ct-type").addEventListener("change", e => upd("type", e.target.value));
+    row.querySelector(".ct-role").addEventListener("change", e => upd("role", e.target.value));
+    row.querySelector(".ct-method").addEventListener("change", e => upd("method", e.target.value));
+    // 성향/친밀도를 직접 고치면 그 날짜의 실제 관측값으로 인정
+    row.querySelector(".ct-stance").addEventListener("change", e => { contact.source = "manual"; upd("stance", e.target.value); });
+    row.querySelector(".ct-level").addEventListener("change", e => { contact.source = "manual"; upd("level", e.target.value); });
     row.querySelector(".ct-note").addEventListener("change", e => { contact.note = e.target.value; persist(); });
     row.querySelector(".ct-del").addEventListener("click", () => {
       if (!confirm("이 접촉 기록을 삭제하시겠습니까?")) return;
       site.contacts = site.contacts.filter(c => c.id !== id);
       persist();
-      renderChajangPills(site);
-      renderContactTable(site);
-      rebuildContactCharts(site);
-      renderWeeklyPersonSection(site);
+      refreshContactViews(site);
     });
   });
 }
@@ -435,14 +559,15 @@ function renderContactTable(site) {
 /* ---------- 특별행사 이력 ---------- */
 function renderEventTable(site) {
   const body = document.getElementById("ctEventBody");
+  const ro = roAttr();
   const rows = site.specialEvents.slice().sort((a, b) => (a.date || "").localeCompare(b.date || ""));
 
   body.innerHTML = rows.map(ev => `
-    <tr data-id="${ev.id}" style="border-bottom:1px solid var(--slate-100)">
-      <td style="padding:5px 4px"><input type="date" class="ev-date" value="${ev.date || ""}" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 5px;font-size:12px"></td>
-      <td style="padding:5px 4px"><input type="text" class="ev-type" list="ctEventTypeList" value="${esc(ev.type || "")}" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 5px;font-size:12px;width:80px"></td>
-      <td style="padding:5px 4px"><input type="number" min="0" class="ev-count" value="${ev.count || 0}" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 5px;font-size:12px;width:56px"></td>
-      <td style="padding:5px 4px"><input type="text" class="ev-note" value="${esc(ev.note || "")}" placeholder="메모" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 5px;font-size:12px;width:160px"></td>
+    <tr data-id="${esc(ev.id)}" style="border-bottom:1px solid var(--slate-100)">
+      <td style="padding:5px 4px"><input type="date" class="ev-date" ${ro} value="${ev.date || ""}" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 5px;font-size:12px"></td>
+      <td style="padding:5px 4px"><input type="text" class="ev-type" ${ro} list="ctEventTypeList" value="${esc(ev.type || "")}" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 5px;font-size:12px;width:80px"></td>
+      <td style="padding:5px 4px"><input type="number" min="0" class="ev-count" ${ro} value="${ev.count || 0}" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 5px;font-size:12px;width:56px"></td>
+      <td style="padding:5px 4px"><input type="text" class="ev-note" ${ro} value="${esc(ev.note || "")}" placeholder="메모" style="border:1px solid var(--slate-300);border-radius:5px;padding:3px 5px;font-size:12px;width:160px"></td>
       <td style="padding:5px 4px"><button class="ev-del admin-only" style="border:none;background:none;color:var(--slate-300);cursor:pointer">✕</button></td>
     </tr>`).join("") || `<tr><td colspan="5" style="padding:14px 4px;color:var(--slate-500)">등록된 행사가 없습니다.</td></tr>`;
 
@@ -452,6 +577,8 @@ function renderEventTable(site) {
     document.body.appendChild(dl);
   }
   document.getElementById("ctEventTypeList").innerHTML = DEFAULT_EVENT_TYPES.map(t => `<option value="${t}">`).join("");
+
+  if (ro) return;
 
   body.querySelectorAll("tr[data-id]").forEach(row => {
     const id = row.dataset.id;
@@ -476,47 +603,64 @@ function renderEventTable(site) {
    ========================================================= */
 function renderMonthlyStatSection(site) {
   const state = contactStateFor(site.id);
-  const months = [...new Set(site.contacts.map(c => monthKeyOf(c.date)).filter(Boolean))].sort();
+  const contacts = selectedContacts(site); // [수정 #4] 차장 선택 반영
+  const months = [...new Set(contacts.map(c => monthKeyOf(c.date)).filter(m => /^\d{4}-\d{2}$/.test(m)))].sort();
   if (!state.selectedStatMonth || !months.includes(state.selectedStatMonth)) {
     state.selectedStatMonth = months.length ? months[months.length - 1] : null;
   }
 
   const sel = document.getElementById("ctStatMonthSelect");
+  if (!sel) return;
   sel.innerHTML = months.length
     ? months.map(m => `<option value="${m}" ${m === state.selectedStatMonth ? "selected" : ""}>${m}</option>`).join("")
     : `<option value="">데이터 없음</option>`;
   sel.onchange = () => { state.selectedStatMonth = sel.value; renderMonthlyStatSection(site); };
 
-  const rows = computeMonthlyStatRows(site, state.selectedStatMonth);
+  const rows = computeMonthlyStatRows(contacts, state.selectedStatMonth);
+  const cell = "text-align:right;padding:4px";
   const body = document.getElementById("ctStatBody");
-  body.innerHTML = rows.map(s => `
+  let html = rows.map(s => `
     <tr style="border-bottom:1px solid var(--slate-100)">
       <td style="padding:4px">${esc(s.chajang)}</td>
-      <td style="text-align:right;padding:4px">${fmtNum(s.headcount)}</td>
-      <td style="text-align:right;padding:4px">${fmtNum(s.상담)}</td>
-      <td style="text-align:right;padding:4px">${fmtNum(s.단순상담)}</td>
-      <td style="text-align:right;padding:4px">${fmtNum(s.TM)}</td>
-      <td style="text-align:right;padding:4px;color:var(--slate-500)">${fmtNum(s.거부)}</td>
-      <td style="text-align:right;padding:4px;color:var(--slate-500)">${fmtNum(s.부재)}</td>
-      <td style="text-align:right;padding:4px;color:var(--slate-500)">${fmtNum(s.불명)}</td>
-      <td style="text-align:right;padding:4px;font-weight:700">${fmtNum(s.total)}</td>
-    </tr>`).join("") || `<tr><td colspan="9" style="padding:14px 4px;color:var(--slate-500)">이 월에 접촉 기록이 없습니다.</td></tr>`;
+      <td style="${cell}">${fmtNum(s.headcount)}</td>
+      <td style="${cell}">${fmtNum(s.상담)}</td>
+      <td style="${cell}">${fmtNum(s.단순상담)}</td>
+      <td style="${cell}">${fmtNum(s.TM)}</td>
+      <td style="${cell};color:var(--slate-500)">${fmtNum(s.거부)}</td>
+      <td style="${cell};color:var(--slate-500)">${fmtNum(s.부재)}</td>
+      <td style="${cell};color:var(--slate-500)">${fmtNum(s.불명)}</td>
+      <td style="${cell};font-weight:700">${fmtNum(s.total)}</td>
+    </tr>`).join("");
+  if (rows.length > 1) {
+    const sum = k => rows.reduce((a, r) => a + r[k], 0);
+    // 합계 인원은 차장 간 중복 인원을 뺀 실제 인원
+    const monthContacts = contacts.filter(c => monthKeyOf(c.date) === state.selectedStatMonth && c.name);
+    const uniq = new Set(monthContacts.map(personKey)).size;
+    html += `
+    <tr style="border-top:2px solid var(--slate-300);font-weight:700">
+      <td style="padding:4px">합계</td>
+      <td style="${cell}">${fmtNum(uniq)}</td>
+      ${["상담", "단순상담", "TM", "거부", "부재", "불명", "total"].map(k => `<td style="${cell}">${fmtNum(sum(k))}</td>`).join("")}
+    </tr>`;
+  }
+  body.innerHTML = html || `<tr><td colspan="9" style="padding:14px 4px;color:var(--slate-500)">이 월에 접촉 기록이 없습니다.</td></tr>`;
 
   rebuildMonthlyStatChart(site, rows);
 }
 
-function computeMonthlyStatRows(site, monthKey) {
+function computeMonthlyStatRows(contacts, monthKey) {
+  if (!monthKey) return [];
   const byChajang = {};
-  site.contacts.filter(c => monthKeyOf(c.date) === monthKey).forEach(c => {
+  contacts.filter(c => monthKeyOf(c.date) === monthKey).forEach(c => {
     const key = c.chajang || "(담당 미지정)";
-    if (!byChajang[key]) byChajang[key] = { chajang: key, names: new Set(), counts: {} };
-    if (c.name) byChajang[key].names.add(c.name);
+    if (!byChajang[key]) byChajang[key] = { chajang: key, people: new Set(), counts: {} };
+    if (c.name) byChajang[key].people.add(personKey(c));
     const m = c.method || "";
     byChajang[key].counts[m] = (byChajang[key].counts[m] || 0) + 1;
   });
   return Object.values(byChajang).map(g => ({
     chajang: g.chajang,
-    headcount: g.names.size,
+    headcount: g.people.size,
     상담: g.counts["상담"] || 0,
     단순상담: g.counts["단순상담"] || 0,
     TM: g.counts["TM"] || 0,
@@ -533,17 +677,26 @@ function rebuildMonthlyStatChart(site, rows) {
   if (!canvas) return;
   if (_contactCharts[site.id]?.monthly) _contactCharts[site.id].monthly.destroy();
 
-  const chart = new Chart(canvas, {
-    type: "bar",
-    data: {
-      labels: rows.map(s => s.chajang),
-      datasets: [
+  // [수정 #10] 접촉방법 데이터가 있으면 상담/단순상담/TM, 없으면 인원·총 건수로 표시
+  const hasMethod = rows.some(s => s.상담 + s.단순상담 + s.TM > 0);
+  const datasets = hasMethod
+    ? [
         { label: "상담", data: rows.map(s => s.상담), backgroundColor: "#378add", borderRadius: 4 },
         { label: "단순상담", data: rows.map(s => s.단순상담), backgroundColor: "#eda100", borderRadius: 4 },
-        { label: "TM", data: rows.map(s => s.TM), backgroundColor: "#1d9e75", borderRadius: 4 }
+        { label: "TM", data: rows.map(s => s.TM), backgroundColor: "#1d9e75", borderRadius: 4 },
+        ...(rows.some(s => s.total - s.상담 - s.단순상담 - s.TM - s.거부 - s.부재 - s.불명 > 0)
+          ? [{ label: "구분없음(명부)", data: rows.map(s => s.total - s.상담 - s.단순상담 - s.TM - s.거부 - s.부재 - s.불명), backgroundColor: "#cbd5e1", borderRadius: 4 }]
+          : [])
       ]
-    },
-    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+    : [
+        { label: "인원", data: rows.map(s => s.headcount), backgroundColor: "#378add", borderRadius: 4 },
+        { label: "총 건수", data: rows.map(s => s.total), backgroundColor: "#1d9e75", borderRadius: 4 }
+      ];
+
+  const chart = new Chart(canvas, {
+    type: "bar",
+    data: { labels: rows.map(s => s.chajang), datasets },
+    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
   });
 
   if (!_contactCharts[site.id]) _contactCharts[site.id] = {};
@@ -568,7 +721,8 @@ function renderWeeklyPersonSection(site) {
   const monthSel = document.getElementById("ctWeeklyMonthSelect");
   if (!monthSel) return;
 
-  const months = [...new Set(site.contacts.map(c => monthKeyOf(c.date)).filter(Boolean))].sort();
+  const contacts = selectedContacts(site);
+  const months = [...new Set(contacts.map(c => monthKeyOf(c.date)).filter(m => /^\d{4}-\d{2}$/.test(m)))].sort();
   const state = contactStateFor(site.id);
   if (!state.selectedWeeklyMonth || !months.includes(state.selectedWeeklyMonth)) {
     state.selectedWeeklyMonth = months.length ? months[months.length - 1] : null;
@@ -578,19 +732,24 @@ function renderWeeklyPersonSection(site) {
     : `<option value="">데이터 없음</option>`;
   monthSel.onchange = () => { state.selectedWeeklyMonth = monthSel.value; renderWeeklyPersonSection(site); };
 
-  const monthContacts = selectedContacts(site).filter(c => monthKeyOf(c.date) === state.selectedWeeklyMonth);
+  const monthContacts = contacts
+    .filter(c => monthKeyOf(c.date) === state.selectedWeeklyMonth && isValidDateStr(c.date))
+    .sort((a, b) => a.date.localeCompare(b.date));
 
-  // 사람별로 묶기
-  const byName = {};
+  // 사람별로 묶기 (이름+생년월일 기준 — 수정 #12)
+  const byKey = {};
   monthContacts.forEach(c => {
     if (!c.name) return;
-    (byName[c.name] = byName[c.name] || { chajang: c.chajang, type: c.type, role: c.role, weeks: {}, total: 0 });
+    const k = personKey(c);
+    const p = (byKey[k] = byKey[k] || { name: personLabel(c, site.contacts), chajang: c.chajang, type: c.type, role: c.role, weeks: {}, total: 0 });
     const wk = weekOfMonthNum(c.date);
-    byName[c.name].weeks[wk] = (byName[c.name].weeks[wk] || 0) + 1;
-    byName[c.name].total += 1;
-    byName[c.name].chajang = c.chajang || byName[c.name].chajang;
+    p.weeks[wk] = (p.weeks[wk] || 0) + 1;
+    p.total += 1;
+    // 가장 최근 기록의 담당/구분을 사용
+    p.chajang = c.chajang || p.chajang;
+    p.type = c.type || p.type;
   });
-  const people = Object.entries(byName).map(([name, d]) => ({ name, ...d }));
+  const people = Object.values(byKey).sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
 
   // 요약 카드
   const totalPeople = people.length;
@@ -615,16 +774,14 @@ function renderWeeklyPersonSection(site) {
   people.forEach(p => {
     const key = p.chajang || "(담당 미지정)";
     if (!byChajang[key]) byChajang[key] = { 임대의원: [], 조합원: [] };
-    const bucket = p.type === "임대의원" ? "임대의원" : "조합원";
-    byChajang[key][bucket].push(p);
+    byChajang[key][p.type === "임대의원" ? "임대의원" : "조합원"].push(p);
   });
   const chajangNames = Object.keys(byChajang).sort((a, b) => a.localeCompare(b));
 
-  function weeksHtml(p) {
-    return [1, 2, 3, 4, 5].map(w => `<td style="text-align:right;padding:4px">${p.weeks[w] ? fmtNum(p.weeks[w]) : "-"}</td>`).join("");
-  }
+  const weeksHtml = p => [1, 2, 3, 4, 5].map(w => `<td style="text-align:right;padding:4px">${p.weeks[w] ? fmtNum(p.weeks[w]) : "-"}</td>`).join("");
   function miniTable(title, list) {
     const sum = list.reduce((s, p) => s + p.total, 0);
+    const wkSum = [1, 2, 3, 4, 5].map(w => list.reduce((s, p) => s + (p.weeks[w] || 0), 0));
     return `
       <div style="flex:1;min-width:280px">
         <div style="font-size:12.5px;font-weight:700;margin-bottom:6px">${title} <span style="color:var(--slate-500);font-weight:400">(${list.length}명 · ${sum}건)</span></div>
@@ -637,8 +794,9 @@ function renderWeeklyPersonSection(site) {
             </tr>
           </thead>
           <tbody>
-            ${list.map(p => `<tr style="border-bottom:1px solid var(--slate-100)"><td style="padding:4px">${esc(p.name)}</td>${weeksHtml(p)}<td style="text-align:right;padding:4px;font-weight:700">${fmtNum(p.total)}</td></tr>`).join("")
+            ${list.map(p => `<tr style="border-bottom:1px solid var(--slate-100)"><td style="padding:4px">${esc(p.name)}${p.role && p.type === "임대의원" && p.role !== "임대의원" ? ` <span style="color:var(--slate-500);font-size:11px">${esc(p.role)}</span>` : ""}</td>${weeksHtml(p)}<td style="text-align:right;padding:4px;font-weight:700">${fmtNum(p.total)}</td></tr>`).join("")
               || `<tr><td colspan="7" style="padding:8px 4px;color:var(--slate-500)">없음</td></tr>`}
+            ${list.length > 1 ? `<tr style="border-top:1px solid var(--slate-300);font-weight:700"><td style="padding:4px">소계</td>${wkSum.map(v => `<td style="text-align:right;padding:4px">${v || "-"}</td>`).join("")}<td style="text-align:right;padding:4px">${sum}</td></tr>` : ""}
           </tbody>
         </table>
       </div>`;
@@ -674,17 +832,18 @@ function rebuildWeeklyCharts(site, people, months) {
       labels: ["1주", "2주", "3주", "4주", "5주"],
       datasets: [{ label: "접촉 건수", data: weekTotals, backgroundColor: "#378add", borderRadius: 4 }]
     },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
   });
 
-  const monthlyTotals = months.map(m => selectedContacts(site).filter(c => monthKeyOf(c.date) === m).length);
+  const sc = selectedContacts(site);
+  const monthlyTotals = months.map(m => sc.filter(c => monthKeyOf(c.date) === m).length);
   _contactCharts[key].monthlyTrend = new Chart(document.getElementById("ctMonthlyTrendChart"), {
     type: "line",
     data: {
       labels: months,
       datasets: [{ label: "총 접촉 건수", data: monthlyTotals, borderColor: "#1d9e75", backgroundColor: "rgba(29,158,117,0.12)", fill: true, tension: 0.3, borderWidth: 2, pointRadius: 3 }]
     },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
   });
 }
 
@@ -697,11 +856,25 @@ function numAt(row, idx) {
 
 /* ---------- 집계 + 차트 (개별 접촉 기록 기준) ---------- */
 function buildRangeKeys(dates, mode) {
-  const keys = [...new Set(dates.filter(Boolean).map(d => groupKeyOf(d, mode)))].sort();
-  return keys.length ? keys : [groupKeyOf(new Date().toISOString().slice(0, 10), mode)];
+  const valid = dates.filter(isValidDateStr);
+  if (mode === "month") return buildMonthRange(valid);
+  const keys = [...new Set(valid.map(d => groupKeyOf(d, mode)))].sort();
+  return keys.length ? keys : [groupKeyOf(todayStr(), mode)];
 }
+/* 첫 달~마지막 달 사이 빈 달도 0으로 채워서 추이가 끊기지 않게 */
 function buildMonthRange(dates) {
-  return buildRangeKeys(dates, "month");
+  const ms = [...new Set(dates.filter(isValidDateStr).map(monthKeyOf))].sort();
+  if (!ms.length) return [monthKeyOf(todayStr())];
+  const out = [];
+  let [y, m] = ms[0].split("-").map(Number);
+  const last = ms[ms.length - 1];
+  while (true) {
+    const k = `${y}-${pad2(m)}`;
+    out.push(k);
+    if (k >= last || out.length > 120) break;
+    m++; if (m > 12) { m = 1; y++; }
+  }
+  return out;
 }
 
 function rebuildContactCharts(site) {
@@ -712,107 +885,110 @@ function rebuildContactCharts(site) {
   const contacts = selectedContacts(site);
   const state = contactStateFor(site.id);
 
-  const metricsBox = document.getElementById("ctMetrics");
-  const uniqueNames = new Set(contacts.map(c => c.name).filter(Boolean));
-  let poscoLike = 0, upCount = 0;
-  const byName = {};
-  contacts.forEach(c => { if (c.name) (byName[c.name] = byName[c.name] || []).push(c); });
-  Object.values(byName).forEach(list => {
-    list.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
-    const first = list[0], last = list[list.length - 1];
-    if (last && site.companies[0] && last.stance === site.companies[0]) poscoLike++;
-    if (first && last && CONTACT_LEVEL_RANK[last.level] > CONTACT_LEVEL_RANK[first.level]) upCount++;
-  });
-  const totalEvents = site.specialEvents.reduce((s, e) => s + (e.count || 0), 0);
+  // 성향/친밀도 관측값 (수정 #7)
+  const obsByKey = observationsFor(site, contacts.filter(c => c.name));
+  const personKeys = Object.keys(obsByKey);
+  const latestOf = k => obsByKey[k][obsByKey[k].length - 1];
 
-  metricsBox.innerHTML = `
+  // [수정 #14] 시공사 목록에 없는 성향 값도 차트에서 빠지지 않게
+  const extraStances = [...new Set(personKeys.map(k => latestOf(k).stance).concat(
+    ...personKeys.map(k => obsByKey[k].map(o => o.stance))))]
+    .filter(s => s && s !== "미정" && !site.companies.includes(s));
+  const stanceLabels = [...site.companies, ...extraStances, "미정"];
+
+  const mainCompany = site.companies[0];
+  const poscoLike = mainCompany ? personKeys.filter(k => latestOf(k).stance === mainCompany).length : 0;
+
+  let up = 0, down = 0, same = 0, single = 0;
+  personKeys.forEach(k => {
+    const list = obsByKey[k];
+    if (list.length < 2) { single++; return; }
+    const d = CONTACT_LEVEL_RANK[list[list.length - 1].level] - CONTACT_LEVEL_RANK[list[0].level];
+    if (d > 0) up++; else if (d < 0) down++; else same++;
+  });
+  const totalEvents = site.specialEvents.reduce((s, e) => s + (Number(e.count) || 0), 0);
+
+  document.getElementById("ctMetrics").innerHTML = `
     <div style="background:var(--paper);border-radius:8px;padding:10px 12px">
       <div style="font-size:11.5px;color:var(--slate-500)">접촉 대상자 수</div>
-      <div style="font-size:20px;font-weight:800">${uniqueNames.size}</div>
+      <div style="font-size:20px;font-weight:800">${personKeys.length}명</div>
     </div>
     <div style="background:var(--paper);border-radius:8px;padding:10px 12px">
-      <div style="font-size:11.5px;color:var(--slate-500)">${esc(site.companies[0] || "-")} 지지</div>
-      <div style="font-size:20px;font-weight:800;color:var(--accent)">${poscoLike}명</div>
+      <div style="font-size:11.5px;color:var(--slate-500)">${esc(mainCompany || "-")} 지지</div>
+      <div style="font-size:20px;font-weight:800;color:var(--accent)">${poscoLike}명${personKeys.length ? ` <span style="font-size:12px;color:var(--slate-500);font-weight:600">(${Math.round(poscoLike / personKeys.length * 100)}%)</span>` : ""}</div>
     </div>
     <div style="background:var(--paper);border-radius:8px;padding:10px 12px">
       <div style="font-size:11.5px;color:var(--slate-500)">친밀도 상승</div>
-      <div style="font-size:20px;font-weight:800;color:var(--ok)">${upCount}명</div>
+      <div style="font-size:20px;font-weight:800;color:var(--ok)">${up}명</div>
     </div>
     <div style="background:var(--paper);border-radius:8px;padding:10px 12px">
       <div style="font-size:11.5px;color:var(--slate-500)">누적 행사 인원</div>
       <div style="font-size:20px;font-weight:800">${totalEvents}명</div>
     </div>`;
 
-  const rangeKeys = buildRangeKeys(contacts.map(c => c.date), state.period);
-  const rentData = rangeKeys.map(k => contacts.filter(c => c.type === "임대의원" && groupKeyOf(c.date, state.period) === k).length);
-  const unionData = rangeKeys.map(k => contacts.filter(c => c.type === "조합원" && groupKeyOf(c.date, state.period) === k).length);
+  // [수정 #6] 개별 접촉 "인원" = 기간 내 중복 제외 인원
+  const validContacts = contacts.filter(c => isValidDateStr(c.date));
+  const rangeKeys = buildRangeKeys(validContacts.map(c => c.date), state.period);
+  const peopleIn = (type, k) => new Set(validContacts
+    .filter(c => c.type === type && groupKeyOf(c.date, state.period) === k)
+    .map(c => c.name ? personKey(c) : c.id)).size;
 
   charts.contact = new Chart(document.getElementById("ctContactChart"), {
     type: "bar",
     data: {
       labels: rangeKeys.map(k => groupLabel(k, state.period)),
       datasets: [
-        { label: "임대의원", data: rentData, backgroundColor: "#378add", borderRadius: 4 },
-        { label: "조합원", data: unionData, backgroundColor: "#d85a30", borderRadius: 4 }
+        { label: "임대의원", data: rangeKeys.map(k => peopleIn("임대의원", k)), backgroundColor: "#378add", borderRadius: 4 },
+        { label: "조합원", data: rangeKeys.map(k => peopleIn("조합원", k)), backgroundColor: "#d85a30", borderRadius: 4 }
       ]
     },
-    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
   });
 
-  const latestStance = {};
-  Object.entries(byName).forEach(([name, list]) => {
-    const sorted = list.slice().sort((a, b) => (a.date || "").localeCompare(b.date || ""));
-    latestStance[name] = sorted[sorted.length - 1].stance || "미정";
-  });
-  const stanceLabels = [...site.companies, "미정"];
-  const stanceCounts = stanceLabels.map(label => Object.values(latestStance).filter(s => s === label).length);
+  const stanceCounts = stanceLabels.map(label => personKeys.filter(k => (latestOf(k).stance || "미정") === label).length);
   charts.stance = new Chart(document.getElementById("ctStanceChart"), {
     type: "doughnut",
     data: {
-      labels: stanceLabels,
-      datasets: [{ data: stanceCounts, backgroundColor: stanceLabels.map((_, i) => EVENT_COLORS[i % EVENT_COLORS.length]), borderColor: "#fff", borderWidth: 2 }]
+      labels: stanceLabels.map((l, i) => `${l} ${stanceCounts[i]}명`),
+      datasets: [{ data: stanceCounts, backgroundColor: stanceLabels.map((l, i) => l === "미정" ? "#94a3b8" : EVENT_COLORS[i % EVENT_COLORS.length]), borderColor: "#fff", borderWidth: 2 }]
     },
     options: { responsive: true, maintainAspectRatio: false, cutout: "60%" }
   });
 
   const methodLabels = CONTACT_METHODS.filter(Boolean);
   const methodCounts = methodLabels.map(m => contacts.filter(c => c.method === m).length);
+  const noMethod = contacts.filter(c => !c.method).length;
   charts.method = new Chart(document.getElementById("ctMethodChart"), {
     type: "bar",
     data: {
-      labels: methodLabels,
-      datasets: [{ label: "건수", data: methodCounts, backgroundColor: "#8b5cf6", borderRadius: 4 }]
+      labels: [...methodLabels, "구분없음"],
+      datasets: [{ label: "건수", data: [...methodCounts, noMethod], backgroundColor: [...methodLabels.map(() => "#8b5cf6"), "#cbd5e1"], borderRadius: 4 }]
     },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
   });
 
-  const contactMonths = buildMonthRange(contacts.map(c => c.date));
+  // [수정 #6, #7] 월말 시점 기준, "그때까지 관측된 사람들"의 최신 성향 비율
+  const obsDates = personKeys.flatMap(k => obsByKey[k].map(o => o.date)).filter(isValidDateStr);
+  const contactMonths = buildMonthRange(validContacts.map(c => c.date).concat(obsDates));
+  const monthStates = contactMonths.map(m => {
+    const end = monthEndOf(m);
+    return personKeys.map(k => stateAsOf(obsByKey[k], end)).filter(Boolean);
+  });
   charts.sentiment = new Chart(document.getElementById("ctSentimentChart"), {
     type: "line",
     data: {
       labels: contactMonths,
       datasets: stanceLabels.map((label, i) => ({
         label,
-        data: contactMonths.map(m => {
-          const inMonth = contacts.filter(c => monthKeyOf(c.date) === m);
-          if (!inMonth.length) return 0;
-          return Math.round(inMonth.filter(c => (c.stance || "미정") === label).length / inMonth.length * 100);
-        }),
-        borderColor: EVENT_COLORS[i % EVENT_COLORS.length],
+        data: monthStates.map(list => list.length ? Math.round(list.filter(o => (o.stance || "미정") === label).length / list.length * 100) : null),
+        borderColor: label === "미정" ? "#94a3b8" : EVENT_COLORS[i % EVENT_COLORS.length],
         backgroundColor: "transparent",
-        tension: 0.3, borderWidth: 2, pointRadius: 3
+        tension: 0.3, borderWidth: 2, pointRadius: 3, spanGaps: true
       }))
     },
     options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, max: 100, ticks: { callback: v => v + "%" } } } }
   });
 
-  let up = 0, down = 0, same = 0;
-  Object.values(byName).forEach(list => {
-    if (list.length < 2) { same++; return; }
-    const sorted = list.slice().sort((a, b) => (a.date || "").localeCompare(b.date || ""));
-    const d = CONTACT_LEVEL_RANK[sorted[sorted.length - 1].level] - CONTACT_LEVEL_RANK[sorted[0].level];
-    if (d > 0) up++; else if (d < 0) down++; else same++;
-  });
   document.getElementById("ctIntimacyBoxes").innerHTML = `
     <div style="background:#e1f5ee;border-radius:8px;padding:10px 12px">
       <div style="font-size:11.5px;color:#04342c">상승</div>
@@ -825,27 +1001,24 @@ function rebuildContactCharts(site) {
     <div style="background:#fcebeb;border-radius:8px;padding:10px 12px">
       <div style="font-size:11.5px;color:#501313">하락</div>
       <div style="font-size:20px;font-weight:800;color:#501313">${down}명</div>
+    </div>
+    <div style="background:var(--paper);border-radius:8px;padding:10px 12px">
+      <div style="font-size:11.5px;color:var(--slate-500)">비교 불가 (기록 1회)</div>
+      <div style="font-size:20px;font-weight:800;color:var(--slate-500)">${single}명</div>
     </div>`;
 
-  const intimacyData = contactMonths.map(m => {
-    const inMonth = contacts.filter(c => monthKeyOf(c.date) === m);
-    return {
-      상: inMonth.filter(c => c.level === "상").length,
-      중: inMonth.filter(c => c.level === "중").length,
-      하: inMonth.filter(c => c.level === "하").length
-    };
-  });
+  // 월말 기준 친밀도 인원 분포 (건수가 아니라 사람 수)
   charts.intimacy = new Chart(document.getElementById("ctIntimacyChart"), {
     type: "bar",
     data: {
       labels: contactMonths,
       datasets: [
-        { label: "상", data: intimacyData.map(d => d.상), backgroundColor: "#1baf7a", borderRadius: 4 },
-        { label: "중", data: intimacyData.map(d => d.중), backgroundColor: "#eda100", borderRadius: 4 },
-        { label: "하", data: intimacyData.map(d => d.하), backgroundColor: "#e34948", borderRadius: 4 }
+        { label: "상", data: monthStates.map(l => l.filter(o => o.level === "상").length), backgroundColor: "#1baf7a", borderRadius: 4 },
+        { label: "중", data: monthStates.map(l => l.filter(o => o.level === "중").length), backgroundColor: "#eda100", borderRadius: 4 },
+        { label: "하", data: monthStates.map(l => l.filter(o => o.level === "하").length), backgroundColor: "#e34948", borderRadius: 4 }
       ]
     },
-    options: { responsive: true, maintainAspectRatio: false, scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } }
+    options: { responsive: true, maintainAspectRatio: false, scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } } } }
   });
 
   const eventMonths = buildMonthRange(site.specialEvents.map(e => e.date));
@@ -856,13 +1029,13 @@ function rebuildContactCharts(site) {
     data: {
       labels: eventMonths,
       datasets: typesForChart.map((t, i) => ({
-        label: t,
-        data: eventMonths.map(m => site.specialEvents.filter(e => e.type === t && monthKeyOf(e.date) === m).length),
+        label: `${t} (참여인원)`,
+        data: eventMonths.map(m => site.specialEvents.filter(e => e.type === t && monthKeyOf(e.date) === m).reduce((s, e) => s + (Number(e.count) || 0), 0)),
         backgroundColor: EVENT_COLORS[i % EVENT_COLORS.length],
         borderRadius: 4
       }))
     },
-    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
   });
 
   _contactCharts[site.id] = charts;
@@ -900,15 +1073,18 @@ function bindContactTabEvents(site) {
   });
 
   document.getElementById("ctAddContact")?.addEventListener("click", () => {
+    // [수정 #8] 차장 필터가 켜져 있으면 그 차장으로 미리 채워서 새 행이 바로 보이게
+    const state = contactStateFor(site.id);
+    const preset = state.selectedChajang.size === 1 ? [...state.selectedChajang][0] : "";
     site.contacts.push({
-      id: uid(), date: todayStr(), chajang: "", name: "",
-      type: "조합원", stance: "미정", level: "하"
+      id: uid(), date: todayStr(), chajang: preset, name: "", role: "", method: "",
+      type: "조합원", stance: "미정", level: "하", source: "manual"
     });
     persist();
-    renderChajangPills(site);
-    renderContactTable(site);
-    rebuildContactCharts(site);
-    renderWeeklyPersonSection(site);
+    refreshContactViews(site);
+    // 새 행(가장 최근 날짜라 맨 위)의 이름 칸으로 이동
+    const first = document.querySelector("#ctContactBody .ct-name");
+    if (first) { first.scrollIntoView({ block: "center" }); first.focus(); }
   });
 
   document.getElementById("ctAddEvent")?.addEventListener("click", () => {
@@ -925,7 +1101,7 @@ function bindContactTabEvents(site) {
       "접촉방법", "성향", "친밀도", "특이사항", "설문조사참여", "갤러리투어참여"
     ]]);
     const ws3 = XLSX.utils.aoa_to_sheet([[
-      "담당차장", "이름", "구분", "직책", "월", "1주", "2주", "3주", "4주", "5주", "성향", "친밀도"
+      "담당차장", "이름", "생년월일", "구분", "직책", "월", "1주", "2주", "3주", "4주", "5주", "성향", "친밀도"
     ]]);
     const ws2 = XLSX.utils.aoa_to_sheet([["날짜", "행사종류", "참여인원", "메모"]]);
     XLSX.utils.book_append_sheet(wb, ws1, "명단");
@@ -942,12 +1118,17 @@ function bindContactTabEvents(site) {
       "성향": c.stance || "", "친밀도": c.level || "", "특이사항": c.note || "",
       "설문조사참여": c.survey || "", "갤러리투어참여": c.galleryTour || ""
     }));
+    const snapRows = site.stanceSnapshots.slice().sort((a, b) => (a.date || "").localeCompare(b.date || "")).map(x => ({
+      "기준일": x.date || "", "이름": x.name || "", "생년월일": x.birthDate || "", "담당차장": x.chajang || "",
+      "구분": x.type || "", "성향": x.stance || "", "친밀도": x.level || ""
+    }));
     const eventRows = site.specialEvents.slice().sort((a, b) => (a.date || "").localeCompare(b.date || "")).map(e => ({
       "날짜": e.date || "", "행사종류": e.type || "", "참여인원": e.count || 0, "메모": e.note || ""
     }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "명단");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(eventRows), "행사이력");
+    if (snapRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(snapRows), "성향스냅샷");
     XLSX.writeFile(wb, `${site.name || "현장"}_접촉현황_${todayStr()}.xlsx`);
   });
 
@@ -970,80 +1151,116 @@ function bindContactTabEvents(site) {
   });
 }
 
+function normBirth(v) {
+  if (typeof v === "number" && v > 1000 && v < 80000) return normalizeDateValue(v);
+  return String(v ?? "").trim();
+}
+
 function importContactExcel(site, binary) {
   const wb = XLSX.read(binary, { type: "binary" });
-  let addedContacts = 0, updatedContacts = 0, addedEvents = 0;
+  let addedContacts = 0, updatedContacts = 0, skippedDup = 0, addedEvents = 0, badDates = 0, replacedWeekly = 0, droppedWeek5 = 0;
 
   if (wb.SheetNames.includes("명단")) {
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets["명단"], { defval: "" });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets["명단"], { defval: "", raw: true });
+    const incomingList = [];
     rows.forEach(row => {
       const name = String(row["이름"] || "").trim();
-      const date = String(row["날짜"] || "").trim();
       if (!name) return;
-      const existing = site.contacts.find(c => c.name === name && c.date === date);
-      const incoming = {
+      // [수정 #5] 엑셀 날짜 일련번호(예: 46000) → 2025-12-09 형식으로 변환
+      const date = normalizeDateValue(row["날짜"]);
+      if (!isValidDateStr(date)) badDates++;
+      const typeRaw = String(row["구분"] || "").trim();
+      const levelRaw = String(row["친밀도"] || "").trim();
+      incomingList.push({
         date, name,
-        birthDate: String(row["생년월일"] || "").trim(),
+        birthDate: normBirth(row["생년월일"]),
         chajang: String(row["담당차장"] || "").trim(),
-        type: CONTACT_TYPES.includes(row["구분"]) ? row["구분"] : "조합원",
+        type: CONTACT_TYPES.includes(typeRaw) ? typeRaw : "조합원",
         role: String(row["직책"] || "").trim(),
         phone: String(row["연락처"] || "").trim(),
         address: String(row["주소"] || "").trim(),
         method: String(row["접촉방법"] || "").trim(),
-        stance: String(row["성향"] || "미정").trim(),
-        level: CONTACT_LEVELS.includes(row["친밀도"]) ? row["친밀도"] : "하",
+        stance: String(row["성향"] || "").trim() || "미정",
+        level: CONTACT_LEVELS.includes(levelRaw) ? levelRaw : "하",
         note: String(row["특이사항"] || "").trim(),
         survey: String(row["설문조사참여"] || "").trim(),
-        galleryTour: String(row["갤러리투어참여"] || "").trim()
-      };
+        galleryTour: String(row["갤러리투어참여"] || "").trim(),
+        source: "manual"
+      });
+    });
+
+    // [수정 #11] 중복은 한 번만 물어봄
+    const findExisting = inc => site.contacts.find(c => personKey(c) === personKey(inc) && c.date === inc.date);
+    const dupCount = incomingList.filter(findExisting).length;
+    let overwrite = false;
+    if (dupCount) {
+      overwrite = confirm(`업로드한 명단 중 ${dupCount}건은 같은 사람·같은 날짜 기록이 이미 있습니다.\n\n확인: 기존 기록을 새 내용으로 덮어쓰기\n취소: 중복은 건너뛰고 새 기록만 추가`);
+    }
+    incomingList.forEach(inc => {
+      const existing = findExisting(inc);
       if (existing) {
-        const ok = confirm(`"${name}" (${date}) 기록이 이미 있습니다.\n확인: 덮어쓰기 / 취소: 새 기록으로 추가`);
-        if (ok) { Object.assign(existing, incoming); updatedContacts++; }
-        else { site.contacts.push({ id: uid(), ...incoming }); addedContacts++; }
+        if (overwrite) { Object.assign(existing, inc); updatedContacts++; }
+        else skippedDup++;
       } else {
-        site.contacts.push({ id: uid(), ...incoming });
+        site.contacts.push({ id: uid(), ...inc });
         addedContacts++;
       }
-      if (incoming.stance && incoming.stance !== "미정" && !site.companies.includes(incoming.stance)) {
-        site.companies.push(incoming.stance);
-      }
+      if (inc.stance !== "미정" && !site.companies.includes(inc.stance)) site.companies.push(inc.stance);
     });
   }
 
   if (wb.SheetNames.includes("주차별집계")) {
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets["주차별집계"], { defval: "" });
-    let addedWeekly = 0;
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets["주차별집계"], { defval: "", raw: true });
     rows.forEach(row => {
       const name = String(row["이름"] || "").trim();
-      const month = String(row["월"] || "").trim();
-      if (!name || !/^\d{4}-\d{2}$/.test(month)) return;
-      const [y, m] = month.split("-").map(Number);
+      let month = row["월"];
+      month = typeof month === "number" ? normalizeDateValue(month).slice(0, 7) : String(month || "").trim().replace(/[.\/]/g, "-");
+      const mm = month.match(/^(\d{4})-(\d{1,2})/);
+      if (!name || !mm) return;
+      const y = Number(mm[1]), m = Number(mm[2]);
+      const monthKey = `${y}-${pad2(m)}`;
+      const lastDay = new Date(y, m, 0).getDate();
       const chajang = String(row["담당차장"] || "").trim();
-      const type = CONTACT_TYPES.includes(row["구분"]) ? row["구분"] : "조합원";
+      const typeRaw = String(row["구분"] || "").trim();
+      const type = CONTACT_TYPES.includes(typeRaw) ? typeRaw : "조합원";
       const role = String(row["직책"] || "").trim();
-      const stance = String(row["성향"] || "미정").trim();
-      const level = CONTACT_LEVELS.includes(row["친밀도"]) ? row["친밀도"] : "하";
+      const stance = String(row["성향"] || "").trim() || "미정";
+      const levelRaw = String(row["친밀도"] || "").trim();
+      const level = CONTACT_LEVELS.includes(levelRaw) ? levelRaw : "하";
+      const birthDate = normBirth(row["생년월일"]);
+      const key = personKey({ name, birthDate });
+
+      // 같은 사람·같은 달 주차별 기록은 새 파일 내용으로 교체 (다시 올려도 중복 안 됨)
+      const before = site.contacts.length;
+      site.contacts = site.contacts.filter(c => !(c.source === "weekly" && personKey(c) === key && monthKeyOf(c.date) === monthKey));
+      replacedWeekly += before - site.contacts.length;
 
       [1, 2, 3, 4, 5].forEach(wk => {
         const count = Number(row[`${wk}주`]) || 0;
+        // [수정 #2] 각 주차의 실제 날짜 범위 안에 배치 (5주 = 29일~말일)
+        const start = (wk - 1) * 7 + 1;
+        const end = Math.min(lastDay, wk * 7 + (wk === 5 ? 3 : 0));
+        if (start > lastDay) { droppedWeek5 += count; return; }
+        const span = end - start + 1;
         for (let i = 0; i < count; i++) {
-          const day = Math.min(28, (wk - 1) * 7 + 1 + (i % 7)); // 주차 범위 안의 날짜로 분산 배치
-          const date = `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-          site.contacts.push({ id: uid(), date, name, chajang, type, role, stance, level });
-          addedWeekly++;
+          const day = start + (i % span);
+          site.contacts.push({ id: uid(), date: `${monthKey}-${pad2(day)}`, name, birthDate, chajang, type, role, stance, level, source: "weekly" });
+          addedContacts++;
         }
       });
-      if (stance && stance !== "미정" && !site.companies.includes(stance)) site.companies.push(stance);
+      // 이 달 말 기준 성향/친밀도 스냅샷
+      upsertSnapshot(site, { date: monthEndOf(monthKey) > todayStr() ? todayStr() : monthEndOf(monthKey), name, birthDate, chajang, type, role, stance, level });
+      if (stance !== "미정" && !site.companies.includes(stance)) site.companies.push(stance);
     });
-    addedContacts += addedWeekly;
   }
 
   if (wb.SheetNames.includes("행사이력")) {
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets["행사이력"], { defval: "" });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets["행사이력"], { defval: "", raw: true });
     rows.forEach(row => {
-      const date = String(row["날짜"] || "").trim();
+      const date = normalizeDateValue(row["날짜"]);
       const type = String(row["행사종류"] || "").trim();
       if (!date || !type) return;
+      if (site.specialEvents.some(e => e.date === date && e.type === type && (Number(e.count) || 0) === (Number(row["참여인원"]) || 0))) return;
       site.specialEvents.push({
         id: uid(), date, type,
         count: Number(row["참여인원"]) || 0,
@@ -1054,13 +1271,22 @@ function importContactExcel(site, binary) {
   }
 
   persist();
-  renderChajangPills(site);
-  renderCompanyTags(site);
-  renderContactTable(site);
-  renderEventTable(site);
-  rebuildContactCharts(site);
-  renderWeeklyPersonSection(site);
-  alert(`명단 ${addedContacts}건 추가 / ${updatedContacts}건 갱신, 행사 ${addedEvents}건 추가되었습니다.`);
+  refreshContactViews(site, { companies: true, events: true });
+  let msg = `명단 ${addedContacts}건 추가 / ${updatedContacts}건 갱신`;
+  if (skippedDup) msg += ` / 중복 ${skippedDup}건 건너뜀`;
+  if (replacedWeekly) msg += `\n(주차별집계: 기존 같은 달 기록 ${replacedWeekly}건은 새 내용으로 교체)`;
+  msg += `\n행사 ${addedEvents}건 추가되었습니다.`;
+  if (badDates) msg += `\n\n⚠ 날짜를 읽지 못한 행이 ${badDates}건 있습니다. 명단 표에서 빨간 테두리 날짜를 확인해주세요.`;
+  if (droppedWeek5) msg += `\n\n⚠ 5주가 없는 달(2월 등)의 5주 값 ${droppedWeek5}건은 반영하지 않았습니다.`;
+  alert(msg);
+}
+
+/* 같은 사람·같은 날짜 스냅샷은 덮어쓰기 */
+function upsertSnapshot(site, snap) {
+  const k = personKey(snap);
+  const ex = site.stanceSnapshots.find(s => personKey(s) === k && s.date === snap.date);
+  if (ex) Object.assign(ex, snap);
+  else site.stanceSnapshots.push({ id: uid(), ...snap });
 }
 
 /* =========================================================
@@ -1090,6 +1316,9 @@ function pad2(n) { return String(n).padStart(2, "0"); }
 function formatDateLocal(d) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
+function formatDateUTC(d) {
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+}
 
 function excelSerialToDate(serial) {
   const utcDays = Math.floor(serial - 25569);
@@ -1118,6 +1347,7 @@ function importMasterRegistryExcel(site, binary) {
   const stanceStart = findColExact(headerRows, "시공사성향");
   const intimacyStart = findColExact(headerRows, "친밀도");
   const surveyStart = findColExact(headerRows, "설문조사");
+  const birthCol = findColByHeader(headerRows, v => v.includes("생년월일"));
 
   if ([nameCol, deptCol, roleCol, stanceStart, intimacyStart, unionCheckCol].some(v => v < 0)) {
     alert("필요한 열(No/성명/담당/임대의원/시공사성향/친밀도)을 모두 찾지 못했습니다. 시트 구조가 다른 것 같습니다.");
@@ -1146,8 +1376,12 @@ function importMasterRegistryExcel(site, binary) {
     return s && !/^-?\d+(\.\d+)?$/.test(s); // 순수 숫자는 라벨이 아니라 잘못 읽힌 데이터일 가능성이 큼
   };
 
-  const existingKeys = new Set(site.contacts.map(c => `${c.name}__${c.date}`));
+  const backupContacts = site.contacts.slice();
+  const backupCompanies = site.companies.slice();
+  const existingKeys = new Set(site.contacts.map(c => `${personKey(c)}__${c.date}`));
   let added = 0, peopleTouched = new Set();
+  const personRows = []; // 스냅샷용 (수정 #7)
+  let maxContactDate = "";
 
   for (let r = 4; r < rows.length; r++) {
     const row = rows[r];
@@ -1157,6 +1391,7 @@ function importMasterRegistryExcel(site, binary) {
     if (!name) continue;
 
     const dept = String(row[deptCol] ?? "").trim();
+    const birthDate = birthCol >= 0 ? normBirth(row[birthCol]) : "";
     const role = String(row[roleCol] ?? "").trim();
     const type = role ? "임대의원" : "조합원";
 
@@ -1175,26 +1410,46 @@ function importMasterRegistryExcel(site, binary) {
       if (!v) return;
       const serial = dateHeaderRow[c];
       if (typeof serial !== "number") return;
-      const dateStr = formatDateLocal(excelSerialToDate(serial));
-      const key = `${name}__${dateStr}`;
+      const dateStr = formatDateUTC(excelSerialToDate(serial));
+      if (dateStr > maxContactDate) maxContactDate = dateStr;
+      const key = `${personKey({ name, birthDate })}__${dateStr}`;
       if (existingKeys.has(key)) return;
       existingKeys.add(key);
-      site.contacts.push({ id: uid(), date: dateStr, chajang: dept, name, type, role, stance, level });
+      site.contacts.push({ id: uid(), date: dateStr, chajang: dept, name, birthDate, type, role, stance, level, source: "import" });
       added++;
       personHasContact = true;
     });
-    if (personHasContact) peopleTouched.add(name);
+    if (personHasContact) peopleTouched.add(personKey({ name, birthDate }));
+    personRows.push({ name, birthDate, chajang: dept, type, role, stance, level });
 
     if (stance !== "미정" && !site.companies.includes(stance)) site.companies.push(stance);
   }
 
-  if (!added) { alert("새로 추가할 접촉 기록이 없습니다 (이미 반영된 데이터일 수 있어요)."); return; }
+  // [수정 #7] 명부의 성향/친밀도는 "파일 기준일" 시점의 현재 상태로 저장
+  // 기준일 = 파일에 기록된 마지막 접촉일 (오늘보다 미래면 오늘)
+  let asOf = maxContactDate && maxContactDate <= todayStr() ? maxContactDate : todayStr();
+  const input = prompt(
+    `명부의 성향·친밀도를 어느 날짜 기준 상태로 저장할까요?\n(기본값: 파일의 마지막 접촉일)\n\n이 날짜로 스냅샷이 저장되어, 다음에 명부를 다시 올리면 변화가 계산됩니다.`,
+    asOf
+  );
+  if (input === null) {
+    site.contacts = backupContacts;
+    site.companies = backupCompanies;
+    alert("업로드를 취소했습니다. 아무것도 반영되지 않았습니다.");
+    return;
+  }
+  const norm = normalizeDateValue(input.trim());
+  if (isValidDateStr(norm)) asOf = norm;
+
+  let changed = 0;
+  const obsBefore = observationsFor(site, site.contacts);
+  personRows.forEach(p => {
+    const prev = (obsBefore[personKey(p)] || []).filter(o => o.date < asOf).pop();
+    if (prev && (prev.stance !== p.stance || prev.level !== p.level)) changed++;
+    upsertSnapshot(site, { date: asOf, ...p });
+  });
 
   persist();
-  renderChajangPills(site);
-  renderCompanyTags(site);
-  renderContactTable(site);
-  rebuildContactCharts(site);
-  renderWeeklyPersonSection(site);
-  alert(`"${targetSheet}" 시트에서 ${peopleTouched.size}명, 총 ${added}건의 접촉 기록을 새로 불러왔습니다.`);
+  refreshContactViews(site, { companies: true });
+  alert(`"${targetSheet}" 시트 반영 완료\n\n· 새 접촉 기록: ${peopleTouched.size}명, ${added}건${added ? "" : " (이미 반영된 날짜만 있음)"}\n· 성향/친밀도 스냅샷: ${personRows.length}명 (기준일 ${asOf})\n· 이전 대비 성향/친밀도가 바뀐 사람: ${changed}명`);
 }
