@@ -27,7 +27,7 @@ function leaseRoleOf(v) {
   if (!s || /후보|탈락|낙선|당선|사퇴/.test(s)) return "";
   return LEASE_ROLES.find(r => s.includes(r)) ? s : "";
 }
-const CONTACT_TAB_VERSION = "2026-09-30 v11";
+const CONTACT_TAB_VERSION = "2026-09-30 v12";
 
 /* 모든 막대/선 그래프 위에 숫자 값을 표시하는 공통 플러그인 (도넛 차트는 제외) */
 if (typeof Chart !== "undefined" && !Chart._ctValueLabelsRegistered) {
@@ -363,139 +363,148 @@ function buildContactReportHtml(site, size) {
   const regDates = registryDates(site);
   const regDate = state.selectedRegDate || regDates[regDates.length - 1] || "";
   const printedAt = todayStr();
+  const pct = (a, b) => b ? `${Math.round(a / b * 1000) / 10}%` : "-";
+  const GOOD = ["상담", "단순상담", "TM"];
 
-  // 1) 담당별 현황: 누계/주차 두 가지를 모두 캡처한 뒤 원래 모드로 되돌림
-  const origMode = state.regMode || "cum";
-  const reg = {};
+  // ---- 담당별 현황: 누계(BA) + 주차(BB)를 한 표로 ----
+  const rows = regDates.length ? registryRows(site, regDate) : [];
+  const groups = {};
+  rows.forEach(x => {
+    const k = x.chajang || "(담당 미지정)";
+    const g = groups[k] = groups[k] || { name: k, total: 0, lease: 0, c: {}, wGood: 0 };
+    g.total++; if (x.type === "임대의원") g.lease++;
+    g.c[x.cumMethod] = (g.c[x.cumMethod] || 0) + 1;
+    if (GOOD.includes(x.weekMethod)) g.wGood++;
+  });
+  const glist = Object.values(groups).sort((a, b) => a.name.localeCompare(b.name));
+  const sum = { name: "합계", total: 0, lease: 0, c: {}, wGood: 0 };
+  glist.forEach(g => { sum.total += g.total; sum.lease += g.lease; sum.wGood += g.wGood; REG_STATUS.forEach(k => sum.c[k] = (sum.c[k] || 0) + (g.c[k] || 0)); });
+  const good = g => GOOD.reduce((s, k) => s + (g.c[k] || 0), 0);
+  const regRow = (g, cls) => `<tr class="${cls || ""}"><td>${esc(g.name)}</td><td>${g.total}</td>
+    <td>${g.c["상담"] || 0}</td><td>${g.c["단순상담"] || 0}</td><td>${g.c["TM"] || 0}</td><td class="em">${good(g)}</td><td class="em">${pct(good(g), g.total)}</td>
+    <td class="wk">${g.wGood}</td><td class="wk">${pct(g.wGood, g.total)}</td>
+    <td>${g.c["거부"] || 0}</td><td>${g.c["부재"] || 0}</td><td>${g.c["불명"] || 0}</td><td>${g.c["미접촉"] || 0}</td><td>${g.lease}</td></tr>`;
+  const regTable = glist.length ? `
+    <table class="t">
+      <thead>
+        <tr><th rowspan="2">담당</th><th rowspan="2">인원</th><th colspan="5">누계 (BA열)</th><th colspan="2" class="wk">주차 (BB열)</th><th colspan="4">누계 기타</th><th rowspan="2">임대<br>의원</th></tr>
+        <tr><th>상담</th><th>단순</th><th>TM</th><th>계</th><th>접촉률</th><th class="wk">계</th><th class="wk">접촉률</th><th>거부</th><th>부재</th><th>불명</th><th>미접촉</th></tr>
+      </thead>
+      <tbody>${glist.map(g => regRow(g)).join("")}${glist.length > 1 ? regRow(sum, "sum") : ""}</tbody>
+    </table>` : `<p class="hint">명부가 업로드되지 않아 담당별 현황이 없습니다.</p>`;
+
+  // 누계 그래프(담당별)는 누계 모드로 그린 뒤 캡처
+  let regImg = "";
   if (regDates.length) {
-    ["cum", "week"].forEach(mode => {
-      state.regMode = mode;
-      renderRegistryStatusSection(site);
-      reg[mode] = { table: cloneTableHtml(document.getElementById("ctRegTable")), img: chartImageSized(_contactCharts[site.id]?.reg, 1500, 380) };
-    });
-    state.regMode = origMode;
-    renderRegistryStatusSection(site);
+    const origMode = state.regMode || "cum";
+    state.regMode = "cum"; renderRegistryStatusSection(site);
+    regImg = chartImageSized(_contactCharts[site.id]?.reg, 900, 520);
+    state.regMode = origMode; renderRegistryStatusSection(site);
   }
 
-  // 2) 요약 수치
-  const rows = regDates.length ? registryRows(site, regDate) : [];
-  const total = rows.length;
-  const cumGood = rows.filter(x => ["상담", "단순상담", "TM"].includes(x.cumMethod)).length;
-  const weekGood = rows.filter(x => ["상담", "단순상담", "TM"].includes(x.weekMethod)).length;
-  const lease = rows.filter(x => x.type === "임대의원").length;
+  // ---- 요약 수치 ----
   const metricsText = [...document.querySelectorAll("#ctMetrics > div")].map(d => {
-    const t = d.querySelectorAll("div");
-    return { label: t[0]?.textContent || "", value: t[1]?.textContent || "" };
+    const t = d.querySelectorAll("div"); return { label: t[0]?.textContent || "", value: t[1]?.textContent || "" };
   });
   const kpi = [
-    ...(total ? [
-      { label: "조합원 (명부)", value: `${fmtNum(total)}명`, sub: `임대의원 ${lease}명` },
-      { label: "누계 접촉 (BA)", value: `${fmtNum(cumGood)}명`, sub: `접촉률 ${total ? (Math.round(cumGood / total * 1000) / 10) : 0}%` },
-      { label: "주차 접촉 (BB)", value: `${fmtNum(weekGood)}명`, sub: `접촉률 ${total ? (Math.round(weekGood / total * 1000) / 10) : 0}%` }
+    ...(sum.total ? [
+      { label: "조합원 (명부)", value: `${fmtNum(sum.total)}명`, sub: `임대의원 ${sum.lease}명` },
+      { label: "누계 접촉 (BA)", value: `${fmtNum(good(sum))}명`, sub: `접촉률 ${pct(good(sum), sum.total)}` },
+      { label: "주차 접촉 (BB)", value: `${fmtNum(sum.wGood)}명`, sub: `접촉률 ${pct(sum.wGood, sum.total)}` },
+      { label: "거부 · 부재 · 불명", value: `${(sum.c["거부"] || 0) + (sum.c["부재"] || 0) + (sum.c["불명"] || 0)}명`, sub: `미접촉 ${sum.c["미접촉"] || 0}명` }
     ] : []),
-    ...metricsText.filter(m => /지지|상승/.test(m.label)).map(m => ({ label: m.label, value: m.value, sub: "" }))
+    ...metricsText.filter(m => /지지/.test(m.label)).map(m => ({ label: m.label, value: m.value, sub: "" }))
   ];
 
+  // ---- 주차별 표: 화면 표에서 칸 아래 작은 줄(방법 구분)은 빼고 간단하게 ----
   const weekMonth = state.selectedWeeklyMonth || "";
   const weekHint = document.getElementById("ctWeekRangeHint")?.textContent || "";
-  const weeklyTable = cloneTableHtml(document.querySelector("#ctWeeklySummary table"));
-  const monthlyTable = cloneTableHtml(document.getElementById("ctStatBody")?.closest("table"));
-  const img = (k, w = 1500, h = 420) => chartImageSized(charts[k], w, h);
-  const methodTitle = document.getElementById("ctMethodTitle")?.textContent || "접촉방법 통계";
+  let weeklyTable = "";
+  const wt = document.querySelector("#ctWeeklySummary table");
+  if (wt) {
+    const c = wt.cloneNode(true);
+    c.querySelectorAll("td div").forEach(n => n.remove());
+    c.querySelectorAll("[style]").forEach(n => n.removeAttribute("style"));
+    c.querySelectorAll("[title]").forEach(n => n.removeAttribute("title"));
+    c.removeAttribute("style"); c.className = "t";
+    const trs = c.querySelectorAll("tbody tr"); if (trs.length > 1) trs[trs.length - 1].className = "sum";
+    weeklyTable = c.outerHTML;
+  }
+  const img = (k, w, h) => chartImageSized(charts[k], w, h);
   const intimacyBoxes = [...document.querySelectorAll("#ctIntimacyBoxes > div")].map(d => d.innerText.replace(/\n+/g, " ")).join(" · ");
-
-  const figure = (title, src, h) => src ? `<div class="fig"><div class="fig-t">${esc(title)}</div><img src="${src}" style="max-height:${h}mm"></div>` : "";
-  const landscape = true;
+  const fig = (title, src, h) => src ? `<div class="fig"><div class="fig-t">${esc(title)}</div><img src="${src}" style="max-height:${h}mm"></div>` : "";
+  const head = (title, meta) => `<div class="head"><h1>${title}</h1><div class="meta">${meta}</div></div>`;
 
   return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(site.name || "현장")} 접촉현황 보고</title>
 <style>
-  @page { size: ${size} ${landscape ? "landscape" : "portrait"}; margin: 0; }
+  @page { size: ${size} landscape; margin: 0; }
   * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  body { margin: 0; font-family: "Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo", sans-serif; color: #1e293b; font-size: 10.5pt; }
-  .page { padding: 11mm 14mm 9mm; break-after: page; page-break-after: always; }
+  body { margin: 0; font-family: "Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo", sans-serif; color: #1e293b; font-size: 9pt; }
+  .page { padding: 9mm 11mm 7mm; break-after: page; page-break-after: always; }
   .page:last-of-type { break-after: auto; page-break-after: auto; }
-  .head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2.5px solid #1e3a5f; padding-bottom: 6px; margin-bottom: 10px; }
-  .head h1 { font-size: 17pt; margin: 0; color: #1e3a5f; }
-  .head .meta { font-size: 9pt; color: #64748b; text-align: right; line-height: 1.5; }
-  h2 { font-size: 12pt; margin: 12px 0 6px; padding-left: 8px; border-left: 4px solid #378add; color: #1e3a5f; }
-  .hint { font-size: 8.5pt; color: #64748b; margin: -2px 0 6px; }
-  .kpis { display: grid; grid-template-columns: repeat(${Math.max(1, Math.min(5, kpi.length))}, 1fr); gap: 8px; margin: 6px 0 4px; }
-  .kpi { border: 1px solid #cbd5e1; border-radius: 6px; padding: 7px 10px; }
-  .kpi .l { font-size: 8.5pt; color: #64748b; }
-  .kpi .v { font-size: 15pt; font-weight: 800; color: #1e3a5f; }
-  .kpi .s { font-size: 8.5pt; color: #64748b; }
-  table { width: 100%; border-collapse: collapse; font-size: 8.5pt; page-break-inside: auto; }
-  th, td { border: 1px solid #cbd5e1; padding: 2px 5px; text-align: right; }
-  th { background: #eef2f7; color: #334155; font-weight: 700; text-align: center; }
-  td:first-child, th:first-child { text-align: left; }
-  tr { page-break-inside: avoid; }
-  tbody tr:last-child td { font-weight: 700; background: #f8fafc; }
-  td div, th div { font-size: 7.5pt; color: #64748b; font-weight: 400; }
-  .fig { page-break-inside: avoid; margin: 6px 0; }
-  .fig-t { font-size: 9.5pt; font-weight: 700; margin-bottom: 3px; color: #334155; }
+  .head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #1e3a5f; padding-bottom: 4px; margin-bottom: 7px; }
+  .head h1 { font-size: 15pt; margin: 0; color: #1e3a5f; }
+  .head .meta { font-size: 8pt; color: #64748b; text-align: right; line-height: 1.45; }
+  h2 { font-size: 10.5pt; margin: 6px 0 4px; padding-left: 7px; border-left: 4px solid #378add; color: #1e3a5f; }
+  .hint { font-size: 7.5pt; color: #64748b; margin: 0 0 4px; }
+  .kpis { display: grid; grid-template-columns: repeat(${Math.max(1, Math.min(5, kpi.length))}, 1fr); gap: 6px; margin-bottom: 6px; }
+  .kpi { border: 1px solid #cbd5e1; border-radius: 5px; padding: 4px 9px; }
+  .kpi .l { font-size: 7.5pt; color: #64748b; }
+  .kpi .v { font-size: 13pt; font-weight: 800; color: #1e3a5f; line-height: 1.2; }
+  .kpi .s { font-size: 7.5pt; color: #64748b; }
+  .cols { display: grid; grid-template-columns: 58% 1fr; gap: 10px; align-items: start; }
+  .t { width: 100%; border-collapse: collapse; font-size: 8pt; }
+  .t th, .t td { border: 1px solid #cbd5e1; padding: 1.5px 4px; text-align: right; white-space: nowrap; }
+  .t th { background: #eef2f7; color: #334155; font-weight: 700; text-align: center; }
+  .t th div { font-size: 6.5pt; font-weight: 400; color: #64748b; }
+  .t td:first-child { text-align: left; }
+  .t .em { font-weight: 700; color: #1e3a5f; }
+  .t .wk { background: #f5f9ff; }
+  .t th.wk { background: #e3edfb; }
+  .t tr.sum td { font-weight: 800; background: #f1f5f9; border-top: 1.5px solid #64748b; }
+  .t td span { font-size: 7pt; color: #64748b; font-weight: 400; }
+  .fig { break-inside: avoid; margin-bottom: 5px; }
+  .fig-t { font-size: 8.5pt; font-weight: 700; margin-bottom: 2px; color: #334155; }
   .fig img { display: block; max-width: 100%; width: auto; margin: 0 auto; }
-  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
-  .foot { margin-top: 8px; font-size: 8pt; color: #94a3b8; text-align: right; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }
+  .foot { font-size: 7pt; color: #94a3b8; text-align: right; margin-top: 3px; }
 </style></head><body>
 
 <div class="page">
-  <div class="head">
-    <h1>${esc(site.name || "현장")} 접촉현황 보고</h1>
-    <div class="meta">명부 기준일 ${esc(regDate || "-")} · ${esc(filterLabel)}<br>출력일 ${printedAt}</div>
-  </div>
+  ${head(`${esc(site.name || "현장")} 접촉현황 보고`, `명부 기준일 ${esc(regDate || "-")} · ${esc(filterLabel)}<br>출력일 ${printedAt}`)}
   ${kpi.length ? `<div class="kpis">${kpi.map(k => `<div class="kpi"><div class="l">${esc(k.label)}</div><div class="v">${esc(k.value)}</div>${k.sub ? `<div class="s">${esc(k.sub)}</div>` : ""}</div>`).join("")}</div>` : ""}
-  ${reg.cum ? `
-    <h2>담당별 접촉현황 — 누계 (명부 BA열)</h2>
-    <div class="hint">조합원(B열=1) 기준 담당별 인원 · 누계 = 상담+단순+TM</div>
-    ${reg.cum.table}` : `<p class="hint">명부가 업로드되지 않아 담당별 현황이 없습니다.</p>`}
-</div>
-
-${reg.week ? `
-<div class="page">
-  <div class="head"><h1>담당별 접촉현황 — 주차 (명부 BB열)</h1><div class="meta">명부 기준일 ${esc(regDate)} · ${esc(filterLabel)}</div></div>
-  ${reg.week.table}
-</div>
-
-<div class="page">
-  <div class="head"><h1>담당별 접촉방법 그래프</h1><div class="meta">명부 기준일 ${esc(regDate)} · ${esc(filterLabel)}</div></div>
-  ${figure("누계 (BA열) — 담당별 접촉방법 인원", reg.cum.img, 80)}
-  ${figure("주차 (BB열) — 담당별 접촉방법 인원", reg.week.img, 80)}
-</div>` : ""}
-
-${weeklyTable ? `
-<div class="page">
-  <div class="head"><h1>주차별 접촉 현황 — ${esc(weekMonth)}</h1><div class="meta">${esc(weekHint)}<br>${esc(filterLabel)}</div></div>
-  <div class="hint">칸: 접촉 인원·건수 / 그 주 접촉방법 (접촉=상담·단순·TM)</div>
-  ${weeklyTable}
-</div>
-
-<div class="page">
-  <div class="head"><h1>주차별 접촉 그래프 — ${esc(weekMonth)}</h1><div class="meta">${esc(filterLabel)}</div></div>
-  ${figure("담당별 주차별 접촉 인원", img("weeklyByChajang", 1500, 420), 85)}
-  <div class="grid2">
-    ${figure("이 달 주차별 접촉 인원·건수", img("weekly", 900, 420), 62)}
-    ${figure("월별 총 접촉 건수 추이", img("monthlyTrend", 900, 420), 62)}
+  <div class="cols">
+    <div>
+      <h2>담당별 접촉현황</h2>
+      <div class="hint">조합원(B열=1) 기준 인원 · 계 = 상담+단순+TM · 파란 칸 = 주차(BB열)</div>
+      ${regTable}
+    </div>
+    <div>
+      ${fig("담당별 누계 접촉방법 (인원)", regImg, 78)}
+      ${fig("현재 시공사 지지 분포", img("stance", 900, 420), 50)}
+    </div>
   </div>
-</div>` : ""}
-
-<div class="page">
-  <div class="head"><h1>접촉방법 · 성향 · 친밀도</h1><div class="meta">${esc(filterLabel)}</div></div>
-  <div class="grid2">
-    ${figure(methodTitle, img("method", 900, 480), 78)}
-    ${figure("현재 시공사 지지 분포", img("stance", 900, 480), 78)}
-    ${figure("시공사 지지 성향 변화 (월말 기준, 인원 비율)", img("sentiment", 900, 480), 78)}
-    ${figure("친밀도 분포 (월말 기준 인원)", img("intimacy", 900, 480), 78)}
-  </div>
-  ${intimacyBoxes ? `<div class="hint" style="margin-top:4px">친밀도 변화: ${esc(intimacyBoxes)}</div>` : ""}
+  <div class="foot">1 / 2</div>
 </div>
 
-${monthlyTable ? `
 <div class="page">
-  <div class="head"><h1>월별 담당자 접촉 건수 — ${esc(state.selectedStatMonth || "")}</h1><div class="meta">날짜별 접촉 기록 기준 · ${esc(filterLabel)}</div></div>
-  ${monthlyTable}
-  ${figure("담당별 접촉 건수", img("monthly", 1500, 380), 62)}
-  <div class="foot">${esc(site.name || "")} 접촉현황 · 출력일 ${printedAt}</div>
-</div>` : ""}
+  ${head(`주차별 접촉 현황 — ${esc(weekMonth)}`, `${esc(weekHint)}<br>${esc(filterLabel)} · 출력일 ${printedAt}`)}
+  <div class="cols">
+    <div>
+      <div class="hint">칸: 그 주 접촉 인원 · 건수 (날짜별 접촉 기록 기준)</div>
+      ${weeklyTable || `<p class="hint">이 달 접촉 기록이 없습니다.</p>`}
+    </div>
+    <div>
+      ${fig("담당별 주차별 접촉 인원", img("weeklyByChajang", 900, 520), 70)}
+      ${fig("주차별 접촉 인원 · 건수", img("weekly", 900, 380), 42)}
+    </div>
+  </div>
+  <div class="row2">
+    ${fig("시공사 지지 성향 변화 (월말 기준, 인원 비율)", img("sentiment", 1100, 400), 48)}
+    ${fig("친밀도 분포 (월말 기준 인원)" + (intimacyBoxes ? ` · ${intimacyBoxes}` : ""), img("intimacy", 1100, 400), 48)}
+  </div>
+  <div class="foot">2 / 2</div>
+</div>
 
 </body></html>`;
 }
