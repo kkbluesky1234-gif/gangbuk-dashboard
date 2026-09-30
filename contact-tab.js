@@ -19,6 +19,7 @@ const CONTACT_METHODS = ["", "상담", "단순상담", "TM", "거부", "부재",
 const DEFAULT_EVENT_TYPES = ["투어", "간담회", "설문조사"];
 const EVENT_COLORS = ["#378add", "#d85a30", "#1d9e75", "#8b5cf6", "#f59e0b"];
 const PERIOD_MODES = [["day", "일별"], ["week", "주별"], ["month", "월별"]];
+const REGISTRY_PARSER_VERSION = 3;
 
 /* 모든 막대/선 그래프 위에 숫자 값을 표시하는 공통 플러그인 (도넛 차트는 제외) */
 if (typeof Chart !== "undefined" && !Chart._ctValueLabelsRegistered) {
@@ -26,6 +27,7 @@ if (typeof Chart !== "undefined" && !Chart._ctValueLabelsRegistered) {
     id: "ctValueLabels",
     afterDatasetsDraw(chart) {
       if (chart.config.type === "doughnut" || chart.config.type === "pie") return;
+      if (chart.options?.plugins?.ctValueLabels === false) return;
       const ctx = chart.ctx;
       chart.data.datasets.forEach((dataset, dsIndex) => {
         const meta = chart.getDatasetMeta(dsIndex);
@@ -105,6 +107,20 @@ function isValidStanceLabel(v) {
   if (/^[\d\s.,\/\-~:()년월일주차]+$/.test(s)) return false;
   return true;
 }
+/* 명부 머리글 약어 → 시공사 이름 (예: "P" = 포스코) */
+const STANCE_ALIASES = { "P": "포스코", "p": "포스코", "포스코이앤씨": "포스코" };
+function stanceFromLabel(v) {
+  const s = String(v ?? "").trim();
+  return STANCE_ALIASES[s] || s;
+}
+/* 칸에 "표시"가 되어 있는지 (1, ○, V 등). 긴 메모 글자는 표시로 보지 않음 */
+function isMark(v) {
+  if (v === null || v === undefined || v === "") return false;
+  if (typeof v === "number") return v > 0;
+  const s = String(v).trim();
+  if (!s) return false;
+  return s.length <= 2 || !!parseMethod(s);
+}
 function cleanStance(v) {
   const s = String(v ?? "").trim();
   return s === "미정" || isValidStanceLabel(s) ? (s || "미정") : "미정";
@@ -113,11 +129,11 @@ function cleanStance(v) {
 /* 접촉방식 값 해석: 명부 날짜 칸에 적힌 글자(상담/단순/TM/거부/부재/불명 등) → 표준 접촉방법 */
 const METHOD_ALIASES = [
   ["단순상담", ["단순상담", "단순", "단"]],
-  ["상담", ["상담", "대면", "면담", "방문", "상"]],
+  ["상담", ["상담", "상다", "대면", "면담", "방문", "상"]],
   ["TM", ["tm", "전화", "통화", "t"]],
   ["거부", ["거부", "거절", "거"]],
   ["부재", ["부재", "부재중", "부"]],
-  ["불명", ["불명", "결번", "주소불명", "불"]]
+  ["불명", ["불명", "붕명", "결번", "주소불명", "불"]]
 ];
 function parseMethod(v) {
   const s = String(v ?? "").replace(/\s/g, "").toLowerCase();
@@ -209,6 +225,7 @@ function refreshContactViews(site, opts = {}) {
   if (opts.table !== false) renderContactTable(site);
   if (opts.companies) renderCompanyTags(site);
   if (opts.events) renderEventTable(site);
+  renderRegistryStatusSection(site);
   renderMonthlyStatSection(site);
   renderWeeklyPersonSection(site);
   rebuildContactCharts(site);
@@ -230,12 +247,12 @@ function observationsFor(site, contacts) {
   const obs = [];
   contacts.forEach(c => {
     if (c.source === "manual" && c.name && isValidDateStr(c.date)) {
-      obs.push({ key: personKey(c), date: c.date, stance: c.stance || "미정", level: c.level || "하" });
+      obs.push({ key: personKey(c), date: c.date, stance: c.stance || "미정", level: c.level || "" });
     }
   });
   site.stanceSnapshots.forEach(s => {
     const k = personKey(s);
-    if (keys.has(k) && isValidDateStr(s.date)) obs.push({ key: k, date: s.date, stance: s.stance || "미정", level: s.level || "하" });
+    if (keys.has(k) && isValidDateStr(s.date)) obs.push({ key: k, date: s.date, stance: s.stance || "미정", level: s.level || "", confirmedUntil: s.confirmedUntil || "" });
   });
   // 관측값이 전혀 없는 사람은 최근 기록 값으로 대체
   const hasObs = new Set(obs.map(o => o.key));
@@ -245,7 +262,7 @@ function observationsFor(site, contacts) {
     if (!c.name || hasObs.has(k)) return;
     if (!fallback[k] || (fallback[k].date || "") < (c.date || "")) fallback[k] = c;
   });
-  Object.entries(fallback).forEach(([k, c]) => obs.push({ key: k, date: c.date || "", stance: c.stance || "미정", level: c.level || "하" }));
+  Object.entries(fallback).forEach(([k, c]) => obs.push({ key: k, date: c.date || "", stance: c.stance || "미정", level: c.level || "" }));
 
   const byKey = {};
   obs.forEach((o, i) => { o.pri = i; (byKey[o.key] = byKey[o.key] || []).push(o); });
@@ -316,10 +333,21 @@ function renderContactTab(site) {
 
     <div class="detail-card">
       <div class="detail-card-head">
-        <h4>월별 담당자 접촉현황 집계 (전체 명부/명단 데이터에서 자동 계산)</h4>
+        <h4>담당별 접촉현황 (명부 BA열 누계 · BB열 주차 기준)</h4>
+        <select id="ctRegDateSelect" style="border:1px solid var(--slate-300);border-radius:6px;padding:5px 8px;font-size:12px"></select>
+      </div>
+      <p class="hint" style="margin-bottom:10px">명부의 조합원(B열=1) 전체를 담당별로 묶어서, <b>누계</b>는 "접촉" 열(BA), <b>주차</b>는 "주차접촉" 열(BB) 값으로 사람 수를 셉니다. 「염리4집계」 시트와 같은 방식이에요. 날짜는 명부를 올린 기준일입니다.</p>
+      <div id="ctRegTabs" style="display:flex;gap:6px;margin-bottom:10px"></div>
+      <div style="position:relative;height:240px;margin-bottom:14px"><canvas id="ctRegChart"></canvas></div>
+      <div style="overflow-x:auto"><table id="ctRegTable" style="width:100%;border-collapse:collapse;font-size:12px"></table></div>
+    </div>
+
+    <div class="detail-card">
+      <div class="detail-card-head">
+        <h4>월별 담당자 접촉 건수 (날짜별 접촉 기록 기준)</h4>
         <select id="ctStatMonthSelect" style="border:1px solid var(--slate-300);border-radius:6px;padding:5px 8px;font-size:12px"></select>
       </div>
-      <p class="hint" style="margin-bottom:10px">위 차장 선택이 그대로 적용됩니다. 명부 날짜 칸에 적힌 접촉방식(상담·단순·TM·거부·부재·불명)을 읽어 집계하고, 읽을 수 없는 값은 회색 <b>구분없음</b>으로 표시돼요.</p>
+      <p class="hint" style="margin-bottom:10px">위 차장 선택이 그대로 적용됩니다. 명부의 접촉방법 칸(상담·단순상담·TM·거부·부재·불명 열에 적힌 날짜)을 날짜별 접촉과 맞춰서 집계하고, 알 수 없는 건은 회색 <b>구분없음</b>으로 표시돼요.</p>
       <div style="position:relative;height:220px;margin-bottom:14px"><canvas id="ctMonthlyStatChart"></canvas></div>
       <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse;font-size:12px">
@@ -379,7 +407,7 @@ function renderContactTab(site) {
     </div>
 
     <div class="detail-card">
-      <div class="detail-card-head"><h4>접촉방법 통계 (상담/단순상담/TM 등)</h4></div>
+      <div class="detail-card-head"><h4 id="ctMethodTitle">접촉방법 통계 (상담/단순상담/TM 등)</h4></div>
       <div style="position:relative;height:200px"><canvas id="ctMethodChart"></canvas></div>
     </div>
 
@@ -465,6 +493,7 @@ function renderContactTab(site) {
   renderCompanyTags(site);
   renderContactTable(site);
   renderEventTable(site);
+  renderRegistryStatusSection(site);
   renderMonthlyStatSection(site);
   renderWeeklyPersonSection(site);
   rebuildContactCharts(site);
@@ -475,7 +504,9 @@ function renderContactTab(site) {
 function renderChajangPills(site) {
   const box = document.getElementById("ctChajangPills");
   const state = contactStateFor(site.id);
-  const chajangList = [...new Set(site.contacts.map(c => c.chajang).filter(Boolean))].sort();
+  const regDates = registryDates(site);
+  const regChajang = regDates.length ? registryRows(site, regDates[regDates.length - 1], true).map(x => x.chajang) : [];
+  const chajangList = [...new Set(site.contacts.map(c => c.chajang).concat(regChajang).filter(Boolean))].sort();
 
   if (!chajangList.length) {
     box.innerHTML = `<p class="hint">등록된 개별 접촉 기록이 없습니다. 아래에서 추가해보세요.</p>`;
@@ -575,7 +606,7 @@ function renderContactTable(site) {
         ${stanceOptionsHtml(site, c.stance)}
       </select></td>
       <td style="padding:5px 4px"><select class="ct-level" ${ro} style="${sel}">
-        ${CONTACT_LEVELS.map(l => `<option ${l === c.level ? "selected" : ""}>${l}</option>`).join("")}
+        <option value="" ${c.level ? "" : "selected"}>-</option>${CONTACT_LEVELS.map(l => `<option ${l === c.level ? "selected" : ""}>${l}</option>`).join("")}
       </select></td>
       <td style="padding:5px 4px"><input type="text" class="ct-note" value="${esc(c.note || "")}" placeholder="특이사항" ${ro} style="${inp};width:100px"></td>
       <td style="padding:5px 4px"><button class="ct-del admin-only" style="border:none;background:none;color:var(--slate-300);cursor:pointer">✕</button></td>
@@ -657,6 +688,100 @@ function renderEventTable(site) {
 /* =========================================================
    월별 담당자 접촉현황 집계 (엑셀 "OO집계" 시트 업로드)
    ========================================================= */
+/* =========================================================
+   담당별 접촉현황 — 명부 BA열(누계), BB열(주차) 기준 (「염리4집계」와 같은 계산)
+   ========================================================= */
+const REG_STATUS = ["상담", "단순상담", "TM", "거부", "부재", "불명", "미접촉"];
+const REG_COLORS = { "상담": "#378add", "단순상담": "#eda100", "TM": "#1d9e75", "거부": "#e34948", "부재": "#8b5cf6", "불명": "#64748b", "미접촉": "#cbd5e1" };
+function regStatusOf(v) {
+  const raw = String(v ?? "").trim();
+  if (!raw || raw.includes("미접촉")) return "미접촉";
+  return parseMethod(raw) || "미접촉";
+}
+/* 명부 행 단위 현황을 작게 저장: { "2026-09-30": [[담당, 임대의원1/0, 누계idx, 주차idx], ...] }
+   (엑셀 집계처럼 "행" 기준으로 세기 위해 사람 중복을 합치지 않음) */
+function registryDates(site) {
+  return Object.keys(site.registryStats || {}).sort();
+}
+function registryRows(site, date, ignoreFilter) {
+  const state = contactStateFor(site.id);
+  const raw = (site.registryStats || {})[date] || [];
+  return raw.map(r => ({ chajang: r[0], type: r[1] ? "임대의원" : "조합원", cumMethod: REG_STATUS[r[2]] || "미접촉", weekMethod: REG_STATUS[r[3]] || "미접촉" }))
+    .filter(x => ignoreFilter || !state.selectedChajang.size || state.selectedChajang.has(x.chajang));
+}
+
+function renderRegistryStatusSection(site) {
+  const sel = document.getElementById("ctRegDateSelect");
+  if (!sel) return;
+  const state = contactStateFor(site.id);
+  const dates = registryDates(site);
+  if (!state.selectedRegDate || !dates.includes(state.selectedRegDate)) state.selectedRegDate = dates[dates.length - 1] || null;
+  if (!state.regMode) state.regMode = "cum";
+  sel.innerHTML = dates.length ? dates.map(d => `<option value="${d}" ${d === state.selectedRegDate ? "selected" : ""}>${d} 기준</option>`).join("") : `<option value="">명부 업로드 필요</option>`;
+  sel.onchange = () => { state.selectedRegDate = sel.value; renderRegistryStatusSection(site); };
+
+  const tabs = document.getElementById("ctRegTabs");
+  tabs.innerHTML = [["cum", "누계 (BA열)"], ["week", "주차 (BB열)"]].map(([v, l]) =>
+    `<button class="btn ${state.regMode === v ? "btn-primary" : "btn-outline"} btn-sm ct-reg-tab" data-v="${v}">${l}</button>`).join("");
+  tabs.querySelectorAll(".ct-reg-tab").forEach(b => b.onclick = () => { state.regMode = b.dataset.v; renderRegistryStatusSection(site); });
+
+  const table = document.getElementById("ctRegTable");
+  if (!dates.length) {
+    table.innerHTML = `<tr><td style="padding:14px 4px;color:var(--slate-500)">"전체 명부 엑셀 업로드"로 명부를 올리면 담당별 현황이 나옵니다.</td></tr>`;
+    if (_contactCharts[site.id]?.reg) { _contactCharts[site.id].reg.destroy(); delete _contactCharts[site.id].reg; }
+    return;
+  }
+
+  const field = state.regMode === "week" ? "weekMethod" : "cumMethod";
+  const rows = registryRows(site, state.selectedRegDate);
+  const groups = {};
+  rows.forEach(x => {
+    const k = x.chajang || "(담당 미지정)";
+    const g = groups[k] = groups[k] || { chajang: k, total: 0, lease: 0 };
+    g.total++;
+    if (x.type === "임대의원") g.lease++;
+    const st = x[field] || "미접촉";
+    g[st] = (g[st] || 0) + 1;
+  });
+  const list = Object.values(groups).sort((a, b) => a.chajang.localeCompare(b.chajang));
+  const sumRow = { chajang: "합계", total: 0, lease: 0 };
+  list.forEach(g => { sumRow.total += g.total; sumRow.lease += g.lease; REG_STATUS.forEach(k => sumRow[k] = (sumRow[k] || 0) + (g[k] || 0)); });
+  const contacted = g => (g["상담"] || 0) + (g["단순상담"] || 0) + (g["TM"] || 0);
+  const pct = (a, b) => b ? `${Math.round(a / b * 1000) / 10}%` : "-";
+
+  const th = t => `<th style="text-align:right;padding:5px 4px;color:var(--slate-500)">${t}</th>`;
+  const td = (v, extra = "") => `<td style="text-align:right;padding:4px;${extra}">${fmtNum(v || 0)}</td>`;
+  const line = (g, bold) => `
+    <tr style="border-bottom:1px solid var(--slate-100);${bold ? "border-top:2px solid var(--slate-300);font-weight:700" : ""}">
+      <td style="padding:4px">${esc(g.chajang)}</td>${td(g.total)}
+      ${td(g["상담"])}${td(g["단순상담"])}${td(g["TM"])}
+      <td style="text-align:right;padding:4px;font-weight:700;color:var(--accent)">${fmtNum(contacted(g))}</td>
+      <td style="text-align:right;padding:4px">${pct(contacted(g), g.total)}</td>
+      ${td(g["거부"], "color:var(--slate-500)")}${td(g["부재"], "color:var(--slate-500)")}${td(g["불명"], "color:var(--slate-500)")}${td(g["미접촉"], "color:var(--slate-500)")}
+      ${td(g.lease)}
+    </tr>`;
+  table.innerHTML = `
+    <thead><tr style="border-bottom:1px solid var(--slate-300)">
+      <th style="text-align:left;padding:5px 4px;color:var(--slate-500)">담당</th>${th("인원")}
+      ${th("상담")}${th("단순")}${th("TM")}${th("<b>누계</b>")}${th("접촉률")}
+      ${th("거부")}${th("부재")}${th("불명")}${th("미접촉")}${th("임대의원")}
+    </tr></thead>
+    <tbody>${list.map(g => line(g)).join("")}${list.length > 1 ? line(sumRow, true) : ""}</tbody>`;
+
+  if (typeof Chart === "undefined") return;
+  if (!_contactCharts[site.id]) _contactCharts[site.id] = {};
+  if (_contactCharts[site.id].reg) _contactCharts[site.id].reg.destroy();
+  _contactCharts[site.id].reg = new Chart(document.getElementById("ctRegChart"), {
+    type: "bar",
+    data: {
+      labels: list.map(g => g.chajang),
+      datasets: REG_STATUS.map(k => ({ label: k, data: list.map(g => g[k] || 0), backgroundColor: REG_COLORS[k], borderRadius: 2 }))
+    },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { ctValueLabels: false },
+      scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } } } }
+  });
+}
+
 function renderMonthlyStatSection(site) {
   const state = contactStateFor(site.id);
   const contacts = selectedContacts(site); // [수정 #4] 차장 선택 반영
@@ -955,10 +1080,15 @@ function rebuildContactCharts(site) {
   const mainCompany = site.companies[0];
   const poscoLike = mainCompany ? personKeys.filter(k => latestOf(k).stance === mainCompany).length : 0;
 
-  let up = 0, down = 0, same = 0, single = 0;
+  let up = 0, down = 0, same = 0, single = 0, noLevel = 0;
   personKeys.forEach(k => {
-    const list = obsByKey[k];
-    if (list.length < 2) { single++; return; }
+    const list = obsByKey[k].filter(o => o.level in CONTACT_LEVEL_RANK); // 친밀도가 입력된 기록만 비교
+    if (!list.length) { noLevel++; return; }
+    if (list.length < 2) {
+      if (list[0].confirmedUntil && list[0].confirmedUntil > list[0].date) same++; // 다음 명부에서도 같았음
+      else single++;
+      return;
+    }
     const d = CONTACT_LEVEL_RANK[list[list.length - 1].level] - CONTACT_LEVEL_RANK[list[0].level];
     if (d > 0) up++; else if (d < 0) down++; else same++;
   });
@@ -1011,14 +1141,29 @@ function rebuildContactCharts(site) {
     options: { responsive: true, maintainAspectRatio: false, cutout: "60%" }
   });
 
-  const methodLabels = CONTACT_METHODS.filter(Boolean);
-  const methodCounts = methodLabels.map(m => contacts.filter(c => c.method === m).length);
-  const noMethod = contacts.filter(c => !c.method).length;
+  // 명부가 올라와 있으면 BA열(누계) 기준 "사람 수", 아니면 날짜별 기록의 건수
+  const regDates = registryDates(site);
+  let methodLabelsOut, methodDataOut, methodColors;
+  const titleEl = document.getElementById("ctMethodTitle");
+  if (regDates.length) {
+    const d = regDates[regDates.length - 1];
+    const rr = registryRows(site, d);
+    methodLabelsOut = REG_STATUS;
+    methodDataOut = REG_STATUS.map(k => rr.filter(x => (x.cumMethod || "미접촉") === k).length);
+    methodColors = REG_STATUS.map(k => REG_COLORS[k]);
+    if (titleEl) titleEl.textContent = `접촉방법 통계 (명부 BA열 누계 · ${d} 기준 · 인원)`;
+  } else {
+    const methodLabels = CONTACT_METHODS.filter(Boolean);
+    methodLabelsOut = [...methodLabels, "구분없음"];
+    methodDataOut = [...methodLabels.map(m => contacts.filter(c => c.method === m).length), contacts.filter(c => !c.method).length];
+    methodColors = [...methodLabels.map(() => "#8b5cf6"), "#cbd5e1"];
+    if (titleEl) titleEl.textContent = "접촉방법 통계 (날짜별 기록 건수)";
+  }
   charts.method = new Chart(document.getElementById("ctMethodChart"), {
     type: "bar",
     data: {
-      labels: [...methodLabels, "구분없음"],
-      datasets: [{ label: "건수", data: [...methodCounts, noMethod], backgroundColor: [...methodLabels.map(() => "#8b5cf6"), "#cbd5e1"], borderRadius: 4 }]
+      labels: methodLabelsOut,
+      datasets: [{ label: regDates.length ? "인원" : "건수", data: methodDataOut, backgroundColor: methodColors, borderRadius: 4 }]
     },
     options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
   });
@@ -1061,6 +1206,7 @@ function rebuildContactCharts(site) {
     <div style="background:var(--paper);border-radius:8px;padding:10px 12px">
       <div style="font-size:11.5px;color:var(--slate-500)">비교 불가 (기록 1회)</div>
       <div style="font-size:20px;font-weight:800;color:var(--slate-500)">${single}명</div>
+      <div style="font-size:11px;color:var(--slate-500);margin-top:2px">친밀도 미입력 ${noLevel}명</div>
     </div>`;
 
   // 월말 기준 친밀도 인원 분포 (건수가 아니라 사람 수)
@@ -1305,7 +1451,7 @@ function importContactExcel(site, binary) {
         }
       });
       // 이 달 말 기준 성향/친밀도 스냅샷
-      upsertSnapshot(site, { date: monthEndOf(monthKey) > todayStr() ? todayStr() : monthEndOf(monthKey), name, birthDate, chajang, type, role, stance, level });
+      upsertSnapshot(site, { date: monthEndOf(monthKey) > todayStr() ? todayStr() : monthEndOf(monthKey), name, birthDate, chajang, type, role, stance, level, origin: "weekly" });
       if (stance !== "미정" && !site.companies.includes(stance)) site.companies.push(stance);
     });
   }
@@ -1326,6 +1472,7 @@ function importContactExcel(site, binary) {
     });
   }
 
+  { const st = contactStateFor(site.id); st.selectedStatMonth = null; st.selectedWeeklyMonth = null; }
   persist();
   refreshContactViews(site, { companies: true, events: true });
   let msg = `명단 ${addedContacts}건 추가 / ${updatedContacts}건 갱신`;
@@ -1376,6 +1523,17 @@ function formatDateUTC(d) {
   return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
 }
 
+/* 929 → 929, "9/29" → 929, 날짜 일련번호 → 월*100+일 */
+function toMonthDay(v) {
+  if (typeof v === "number") {
+    if (v >= 101 && v <= 1231 && v % 100 >= 1 && v % 100 <= 31) return Math.floor(v);
+    if (v > 20000 && v < 80000) { const d = normalizeDateValue(v); return Number(d.slice(5, 7)) * 100 + Number(d.slice(8, 10)); }
+    return 0;
+  }
+  const m = String(v ?? "").trim().match(/^(\d{1,2})[.\/\-월\s]+(\d{1,2})/);
+  return m ? Number(m[1]) * 100 + Number(m[2]) : 0;
+}
+
 function excelSerialToDate(serial) {
   const utcDays = Math.floor(serial - 25569);
   return new Date(utcDays * 86400 * 1000);
@@ -1405,7 +1563,11 @@ function importMasterRegistryExcel(site, binary) {
   const surveyStart = findColExact(headerRows, "설문조사");
   const birthCol = findColByHeader(headerRows, v => v.includes("생년월일"));
   // "접촉방식/접촉방법" 열이 따로 있으면 날짜 칸에 방식이 없을 때 보조로 사용
-  const methodCol = findColByHeader(headerRows, v => v.includes("접촉방식") || v.includes("접촉방법"));
+  const methodCol = (() => {
+    const a = findColByHeader(headerRows, v => v.includes("접촉방식") || v.includes("접촉방법"));
+    return a >= 0 ? a : findColExact(headerRows, "접촉"); // 염리4 명부: BA "접촉" 열 = 누계(최근) 접촉현황
+  })();
+  const weekCol = findColExact(headerRows, "주차접촉"); // 염리4 명부: BB "주차 접촉" 열
 
   if ([nameCol, deptCol, roleCol, stanceStart, intimacyStart, unionCheckCol].some(v => v < 0)) {
     alert("필요한 열(No/성명/담당/임대의원/시공사성향/친밀도)을 모두 찾지 못했습니다. 시트 구조가 다른 것 같습니다.");
@@ -1456,25 +1618,42 @@ function importMasterRegistryExcel(site, binary) {
     });
     return best || [];
   };
-  const stanceLabelRow = pickLabelRow(stanceStart + 1, intimacyStart, isRealLabel);
-  const intimacyLabelRow = pickLabelRow(intimacyStart + 1, intimacyEnd, v => CONTACT_LEVELS.includes(String(v ?? "").trim()));
+  // 라벨이 머리글과 같은 열에 있을 수 있음 (예: "시공사성향" 열 아래 "P", "친밀도" 열 아래 "상")
+  const stanceLabelRow = pickLabelRow(stanceStart, intimacyStart, isRealLabel);
+  const intimacyLabelRow = pickLabelRow(intimacyStart, intimacyEnd, v => CONTACT_LEVELS.includes(String(v ?? "").trim()));
 
 
-  const backupContacts = JSON.parse(JSON.stringify(site.contacts));
+  // 이전 버전에서 잘못 읽힌 명부 데이터(포스코 "P"·친밀도 "상" 누락, 숫자 성향 등)를 한 번 정리
+  let didReset = false;
+  const hasOldImport = site.contacts.some(c => c.source === "import") || site.stanceSnapshots.length;
+  if (hasOldImport && site.registryParserVersion !== REGISTRY_PARSER_VERSION) {
+    if (confirm("명부 읽는 방식이 새로 바뀌었습니다.\n\n예전에 올린 명부 데이터는 포스코(P)·친밀도 '상'이 빠지는 등 잘못 읽힌 값이 섞여 있습니다.\n\n확인: 예전 명부 업로드분을 지우고 이 파일로 새로 채우기 (권장, 직접 입력한 기록은 유지)\n취소: 지우지 않고 추가만 하기")) {
+      var resetBackup = { contacts: JSON.parse(JSON.stringify(site.contacts)), snaps: JSON.parse(JSON.stringify(site.stanceSnapshots)) };
+      site.contacts = site.contacts.filter(c => c.source !== "import");
+      site.stanceSnapshots = site.stanceSnapshots.filter(x => x.origin === "weekly");
+      resetBackup.reg = site.registryStats; site.registryStats = {};
+      didReset = true;
+    }
+  }
+  const backupContacts = didReset ? resetBackup.contacts : JSON.parse(JSON.stringify(site.contacts));
   const backupCompanies = site.companies.slice();
   const existingKeys = new Set(site.contacts.map(c => `${personKey(c)}__${c.date}`));
   let added = 0, peopleTouched = new Set();
-  let methodFilled = 0, methodKnown = 0;
+  let methodFilled = 0, methodKnown = 0, excludedRows = 0;
   const unknownMethodVals = {}; // 인식 못한 날짜칸 값 → 건수 (안내용)
   const byKeyDate = {};
   site.contacts.forEach(c => { byKeyDate[`${personKey(c)}__${c.date}`] = c; });
   const personRows = []; // 스냅샷용 (수정 #7)
+  const regRows = [];    // 담당별 접촉현황(BA/BB)용
   let maxContactDate = "";
 
   for (let r = 4; r < rows.length; r++) {
     const row = rows[r];
     if (!row) continue;
-    if (!row[unionCheckCol]) continue; // 체크(1) 안 된 중복/부가 행은 건너뜀
+    // 조합원 체크 칸: 1(또는 ○/V)만 인정. "?", "부", "비" 등은 조합원이 아니므로 제외
+    const chk = row[unionCheckCol];
+    const chkOk = typeof chk === "number" ? chk > 0 : ["1", "○", "O", "o", "V", "v", "✓", "Y", "y"].includes(String(chk ?? "").trim());
+    if (!chkOk) { if (String(chk ?? "").trim()) excludedRows++; continue; }
     const name = String(row[nameCol] ?? "").trim();
     if (!name) continue;
 
@@ -1484,30 +1663,43 @@ function importMasterRegistryExcel(site, binary) {
     const type = role ? "임대의원" : "조합원";
 
     let stance = "미정";
-    for (let c = stanceStart + 1; c < intimacyStart; c++) {
-      if (row[c] && isRealLabel(stanceLabelRow[c])) { stance = String(stanceLabelRow[c]).trim(); break; }
+    for (let c = stanceStart; c < intimacyStart; c++) {
+      if (isMark(row[c]) && isRealLabel(stanceLabelRow[c]) && cleanHeader(stanceLabelRow[c]) !== "시공사성향") {
+        stance = stanceFromLabel(stanceLabelRow[c]); break;
+      }
     }
-    let level = "하";
-    for (let c = intimacyStart + 1; c < intimacyEnd; c++) {
+    // 친밀도 표시가 없으면 "하"로 넣지 않고 비워둠 (미입력)
+    let level = "";
+    for (let c = intimacyStart; c < intimacyEnd; c++) {
       const lv = String(intimacyLabelRow[c] ?? "").trim();
-      if (row[c] && CONTACT_LEVELS.includes(lv)) { level = lv; break; }
+      if (isMark(row[c]) && CONTACT_LEVELS.includes(lv)) { level = lv; break; }
     }
 
+    // 접촉방법 칸(상담/단순상담/TM/거부/부재/불명)에는 "마지막으로 그 방법으로 접촉한 날짜"(예: 929 = 9/29)가 들어있음
+    const methodByDay = {};
+    const methodKinds = new Set();
+    methodLabelCols.forEach(([c, m]) => {
+      const v = row[c];
+      if (v === "" || v === null || v === undefined) return;
+      methodKinds.add(m);
+      const md = toMonthDay(v);
+      if (md) methodByDay[md] = m;
+    });
+    const onlyKind = methodKinds.size === 1 ? [...methodKinds][0] : "";
+    const latestMethod = methodCol >= 0 ? parseMethod(row[methodCol]) : "";
+
     let personHasContact = false;
-    const blockHit = methodLabelCols.find(([c]) => row[c]);
-    const rowBlockMethod = blockHit ? blockHit[1] : "";
     dateCols.forEach(c => {
       const v = row[c];
-      if (!v) return;
+      if (!isMark(v)) return;
       const serial = dateHeaderRow[c];
       if (typeof serial !== "number") return;
       const dateStr = formatDateUTC(excelSerialToDate(serial));
       if (dateStr > maxContactDate) maxContactDate = dateStr;
       const key = `${personKey({ name, birthDate })}__${dateStr}`;
-      // [수정] 날짜 칸에 적힌 접촉방식 읽기 (예: 상담, 단순, TM, 거부, 부재)
-      let method = parseMethod(v);
-      if (!method && methodCol >= 0) method = parseMethod(row[methodCol]);
-      if (!method && rowBlockMethod) method = rowBlockMethod;
+      // 접촉방법 결정 순서: ① 날짜 칸 글자 ② 방법칸의 같은 날짜 ③ 그 사람이 한 가지 방법만 있으면 그 방법 ④ "접촉" 열(최근 방법)
+      const md = Number(dateStr.slice(5, 7)) * 100 + Number(dateStr.slice(8, 10));
+      let method = parseMethod(v) || methodByDay[md] || onlyKind || latestMethod;
       if (method) methodKnown++;
       else { const sv = String(v).trim(); unknownMethodVals[sv] = (unknownMethodVals[sv] || 0) + 1; }
       if (existingKeys.has(key)) {
@@ -1525,6 +1717,9 @@ function importMasterRegistryExcel(site, binary) {
     });
     if (personHasContact) peopleTouched.add(personKey({ name, birthDate }));
     personRows.push({ name, birthDate, chajang: dept, type, role, stance, level });
+    regRows.push([dept, type === "임대의원" ? 1 : 0,
+      REG_STATUS.indexOf(methodCol >= 0 ? regStatusOf(row[methodCol]) : "미접촉"),
+      REG_STATUS.indexOf(weekCol >= 0 ? regStatusOf(row[weekCol]) : "미접촉")]);
 
     if (stance !== "미정" && !site.companies.includes(stance)) site.companies.push(stance);
   }
@@ -1539,6 +1734,7 @@ function importMasterRegistryExcel(site, binary) {
   if (input === null) {
     site.contacts = backupContacts;
     site.companies = backupCompanies;
+    if (didReset) { site.stanceSnapshots = resetBackup.snaps; site.registryStats = resetBackup.reg; }
     alert("업로드를 취소했습니다. 아무것도 반영되지 않았습니다.");
     return;
   }
@@ -1546,17 +1742,31 @@ function importMasterRegistryExcel(site, binary) {
   if (isValidDateStr(norm)) asOf = norm;
 
   let changed = 0;
-  const obsBefore = observationsFor(site, site.contacts);
+  // 이전 스냅샷(이전 명부 업로드)과 비교
+  site.registryStats = site.registryStats || {};
+  site.registryStats[asOf] = regRows;
+  const snapByKey = {};
+  site.stanceSnapshots.forEach(x => (snapByKey[personKey(x)] = snapByKey[personKey(x)] || []).push(x));
   personRows.forEach(p => {
-    const prev = (obsBefore[personKey(p)] || []).filter(o => o.date < asOf).pop();
-    if (prev && (prev.stance !== p.stance || prev.level !== p.level)) changed++;
-    upsertSnapshot(site, { date: asOf, ...p });
+    const prev = (snapByKey[personKey(p)] || []).filter(x => x.date < asOf).sort((x, y) => x.date.localeCompare(y.date)).pop();
+    if (prev && prev.stance === p.stance && (prev.level || "") === (p.level || "")) {
+      // 변화 없으면 새로 저장하지 않고 "이 날짜에도 같았음"만 표시 (저장 용량 절약)
+      if (!prev.confirmedUntil || prev.confirmedUntil < asOf) prev.confirmedUntil = asOf;
+      prev.chajang = p.chajang;
+      return;
+    }
+    if (prev) changed++;
+    upsertSnapshot(site, { date: asOf, ...p, origin: "master" });
   });
 
+  { const st = contactStateFor(site.id); st.selectedStatMonth = null; st.selectedWeeklyMonth = null; st.selectedRegDate = null; }
+  site.registryParserVersion = REGISTRY_PARSER_VERSION;
   persist();
   refreshContactViews(site, { companies: true });
   const unk = Object.entries(unknownMethodVals).sort((a, b) => b[1] - a[1]);
   let methodMsg = `\n· 접촉방식 인식: ${methodKnown}건` + (methodLabelCols.length ? ` [머리글 칸: ${methodLabelCols.map(x => x[1]).join("/")}]` : "") + (methodFilled ? ` (기존 기록 ${methodFilled}건 접촉방식 보충)` : "");
   if (unk.length) methodMsg += `\n· 접촉방식을 알 수 없는 칸 값: ${unk.slice(0, 8).map(([v, n]) => `"${v}" ${n}건`).join(", ")}${unk.length > 8 ? " …" : ""}\n  → 이 값들은 "구분없음"으로 집계됩니다. 각 값이 어떤 방식인지 알려주시면 추가해 드릴게요.`;
-  alert(`"${targetSheet}" 시트 반영 완료\n\n· 새 접촉 기록: ${peopleTouched.size}명, ${added}건${added ? "" : " (이미 반영된 날짜만 있음)"}${methodMsg}\n· 성향/친밀도 스냅샷: ${personRows.length}명 (기준일 ${asOf})\n· 이전 대비 성향/친밀도가 바뀐 사람: ${changed}명`);
+  const extra = (didReset ? "\n· 예전 명부 업로드분을 지우고 새로 불러왔습니다." : "") +
+    (excludedRows ? `\n· 조합원 칸이 1이 아닌 행(?, 부, 비 등) ${excludedRows}건은 제외` : "");
+  alert(`"${targetSheet}" 시트 반영 완료${extra}\n\n· 새 접촉 기록: ${peopleTouched.size}명, ${added}건${added ? "" : " (이미 반영된 날짜만 있음)"}${methodMsg}\n· 성향/친밀도 스냅샷: ${personRows.length}명 (기준일 ${asOf})\n· 이전 대비 성향/친밀도가 바뀐 사람: ${changed}명`);
 }
