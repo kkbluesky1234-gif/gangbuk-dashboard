@@ -27,7 +27,7 @@ function leaseRoleOf(v) {
   if (!s || /후보|탈락|낙선|당선|사퇴/.test(s)) return "";
   return LEASE_ROLES.find(r => s.includes(r)) ? s : "";
 }
-const CONTACT_TAB_VERSION = "2026-09-30 v12";
+const CONTACT_TAB_VERSION = "2026-09-30 v13";
 
 /* 모든 막대/선 그래프 위에 숫자 값을 표시하는 공통 플러그인 (도넛 차트는 제외) */
 if (typeof Chart !== "undefined" && !Chart._ctValueLabelsRegistered) {
@@ -356,6 +356,51 @@ function cloneTableHtml(el) {
   return c.outerHTML;
 }
 
+/* 차장 한 명 출력용: 그 차장이 맡은 조합원 명단 (명부 기준 + 이 달 주차별 접촉) */
+function buildPersonListHtml(site, chajang, regDate, weekMonth) {
+  const regs = registryRows(site, regDate, true).filter(x => (x.chajang || "(담당 미지정)") === chajang);
+  const ranges = weekRangesOfMonth(weekMonth);
+  const W = ranges.map((_, i) => i + 1);
+  const weeksByKey = {};
+  site.contacts.forEach(c => {
+    if (!isValidDateStr(c.date) || !ranges.length || c.date < ranges[0].start || c.date > ranges[ranges.length - 1].end) return;
+    const k = personKey(c); const w = weekIndexIn(ranges, c.date);
+    (weeksByKey[k] = weeksByKey[k] || {})[w] = (weeksByKey[k][w] || 0) + 1;
+  });
+  let people;
+  if (regs.length && regs[0].key) {
+    people = regs.map(x => ({ key: x.key, type: x.type, role: x.role, cum: x.cumMethod, week: x.weekMethod, stance: x.stance, level: x.level }));
+  } else {
+    // 예전 방식으로 저장된 명부(이름 정보 없음): 접촉 기록에서 명단을 만듦
+    const m = {};
+    site.contacts.filter(c => (c.chajang || "(담당 미지정)") === chajang && c.name).forEach(c => {
+      m[personKey(c)] = { key: personKey(c), type: c.type, role: c.role, cum: c.method || "-", week: "-", stance: c.stance, level: c.level };
+    });
+    people = Object.values(m);
+  }
+  const order = s => { const i = REG_STATUS.indexOf(s); return i < 0 ? 99 : i; };
+  people.sort((a, b) => (a.type === "임대의원" ? 0 : 1) - (b.type === "임대의원" ? 0 : 1) || order(a.cum) - order(b.cum) || a.key.localeCompare(b.key));
+  const nameOf = k => { const [n, bd] = k.split("|"); return bd ? `${n} <span>(${bd.slice(0, 6)})</span>` : n; };
+  const cls = s => ({ "상담": "g", "단순상담": "g", "TM": "g", "거부": "r", "부재": "a", "불명": "a", "미접촉": "n" }[s] || "");
+  const shortM = s => s === "단순상담" ? "단순" : s;
+  const rowsHtml = people.map((p, i) => {
+    const wk = weeksByKey[p.key] || {};
+    const tot = W.reduce((s, w) => s + (wk[w] || 0), 0);
+    return `<tr><td class="c">${i + 1}</td><td>${nameOf(p.key)}</td><td class="c">${p.type === "임대의원" ? esc(p.role || "임대의원") : ""}</td>
+      <td class="c m ${cls(p.cum)}">${esc(shortM(p.cum))}</td><td class="c m ${cls(p.week)}">${esc(shortM(p.week))}</td>
+      <td class="c">${esc(p.stance && p.stance !== "미정" ? p.stance : "")}</td><td class="c">${esc(p.level || "")}</td>
+      ${W.map(w => `<td class="c">${wk[w] || ""}</td>`).join("")}<td class="c em">${tot || ""}</td></tr>`;
+  }).join("");
+  const lease = people.filter(p => p.type === "임대의원").length;
+  return {
+    count: people.length, lease,
+    html: `<table class="t list">
+      <thead><tr><th>No</th><th>이름</th><th>임대의원</th><th>누계<div>BA</div></th><th>주차<div>BB</div></th><th>성향</th><th>친밀도</th>
+        ${W.map((w, i) => `<th>${w}주<div>${shortMD(ranges[i].start)}~</div></th>`).join("")}<th>합계</th></tr></thead>
+      <tbody>${rowsHtml || `<tr><td colspan="${8 + W.length}">명단이 없습니다.</td></tr>`}</tbody></table>`
+  };
+}
+
 function buildContactReportHtml(site, size) {
   const state = contactStateFor(site.id);
   const charts = _contactCharts[site.id] || {};
@@ -430,6 +475,8 @@ function buildContactReportHtml(site, size) {
     const trs = c.querySelectorAll("tbody tr"); if (trs.length > 1) trs[trs.length - 1].className = "sum";
     weeklyTable = c.outerHTML;
   }
+  const single = state.selectedChajang.size === 1 ? [...state.selectedChajang][0] : "";
+  const plist = single ? buildPersonListHtml(site, single, regDate, weekMonth) : null;
   const img = (k, w, h) => chartImageSized(charts[k], w, h);
   const intimacyBoxes = [...document.querySelectorAll("#ctIntimacyBoxes > div")].map(d => d.innerText.replace(/\n+/g, " ")).join(" · ");
   const fig = (title, src, h) => src ? `<div class="fig"><div class="fig-t">${esc(title)}</div><img src="${src}" style="max-height:${h}mm"></div>` : "";
@@ -467,6 +514,16 @@ function buildContactReportHtml(site, size) {
   .fig-t { font-size: 8.5pt; font-weight: 700; margin-bottom: 2px; color: #334155; }
   .fig img { display: block; max-width: 100%; width: auto; margin: 0 auto; }
   .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }
+  .t.list { font-size: 7.6pt; }
+  .t.list td { padding: 0 4px; line-height: 1.32; }
+  .t.list td:nth-child(2) { text-align: left; }
+  .t.list thead { display: table-header-group; }
+  .t .c { text-align: center; }
+  .t td span { font-size: 6.5pt; color: #94a3b8; }
+  .t td.m.g { color: #065f46; background: #ecfdf5; font-weight: 700; }
+  .t td.m.r { color: #991b1b; background: #fef2f2; }
+  .t td.m.a { color: #92400e; background: #fffbeb; }
+  .t td.m.n { color: #94a3b8; }
   .foot { font-size: 7pt; color: #94a3b8; text-align: right; margin-top: 3px; }
 </style></head><body>
 
@@ -478,15 +535,25 @@ function buildContactReportHtml(site, size) {
       <h2>담당별 접촉현황</h2>
       <div class="hint">조합원(B열=1) 기준 인원 · 계 = 상담+단순+TM · 파란 칸 = 주차(BB열)</div>
       ${regTable}
+      ${single ? `<h2>주차별 접촉 — ${esc(weekMonth)}</h2><div class="hint">${esc(weekHint)}</div>${weeklyTable}
+        ${fig("주차별 접촉 인원 · 건수", img("weekly", 1000, 380), 52)}` : ""}
     </div>
     <div>
-      ${fig("담당별 누계 접촉방법 (인원)", regImg, 78)}
-      ${fig("현재 시공사 지지 분포", img("stance", 900, 420), 50)}
+      ${fig(single ? "누계 접촉방법 (인원)" : "담당별 누계 접촉방법 (인원)", regImg, single ? 54 : 78)}
+      ${single ? fig("담당 주차별 접촉 인원", img("weeklyByChajang", 900, 400), 44) : ""}
+      ${fig("현재 시공사 지지 분포", img("stance", 900, 420), single ? 34 : 50)}
     </div>
   </div>
   <div class="foot">1 / 2</div>
 </div>
 
+${single ? `
+<div class="page">
+  ${head(`${esc(single)} 담당 조합원 명단 — ${esc(weekMonth)}`, `명부 기준일 ${esc(regDate || "-")} · ${plist.count}명 (임대의원 ${plist.lease}명)<br>${esc(weekHint)}`)}
+  <div class="hint">누계·주차 = 명부 BA·BB열 · 1~5주 = 이 달 주차별 접촉 건수 · 초록=접촉 / 빨강=거부 / 주황=부재·불명</div>
+  ${plist.html}
+  <div class="foot">2 / 2 · 출력일 ${printedAt}</div>
+</div>` : `
 <div class="page">
   ${head(`주차별 접촉 현황 — ${esc(weekMonth)}`, `${esc(weekHint)}<br>${esc(filterLabel)} · 출력일 ${printedAt}`)}
   <div class="cols">
@@ -504,7 +571,7 @@ function buildContactReportHtml(site, size) {
     ${fig("친밀도 분포 (월말 기준 인원)" + (intimacyBoxes ? ` · ${intimacyBoxes}` : ""), img("intimacy", 1100, 400), 48)}
   </div>
   <div class="foot">2 / 2</div>
-</div>
+</div>`}
 
 </body></html>`;
 }
@@ -951,7 +1018,8 @@ function registryDates(site) {
 function registryRows(site, date, ignoreFilter) {
   const state = contactStateFor(site.id);
   const raw = (site.registryStats || {})[date] || [];
-  return raw.map(r => ({ chajang: r[0], type: r[1] ? "임대의원" : "조합원", cumMethod: REG_STATUS[r[2]] || "미접촉", weekMethod: REG_STATUS[r[3]] || "미접촉" }))
+  return raw.map(r => ({ chajang: r[0], type: r[1] ? "임대의원" : "조합원", cumMethod: REG_STATUS[r[2]] || "미접촉", weekMethod: REG_STATUS[r[3]] || "미접촉",
+      key: r[4] || "", role: r[5] || "", stance: r[6] || "", level: r[7] || "" }))
     .filter(x => ignoreFilter || !state.selectedChajang.size || state.selectedChajang.has(x.chajang));
 }
 
@@ -2063,7 +2131,8 @@ function importMasterRegistryExcel(site, binary) {
     personRows.push({ name, birthDate, chajang: dept, type, role, stance, level });
     regRows.push([dept, type === "임대의원" ? 1 : 0,
       REG_STATUS.indexOf(methodCol >= 0 ? regStatusOf(row[methodCol]) : "미접촉"),
-      REG_STATUS.indexOf(weekCol >= 0 ? regStatusOf(row[weekCol]) : "미접촉")]);
+      REG_STATUS.indexOf(weekCol >= 0 ? regStatusOf(row[weekCol]) : "미접촉"),
+      personKey({ name, birthDate }), role, stance, level]);   // 차장별 명단 출력용
 
     if (stance !== "미정" && !site.companies.includes(stance)) site.companies.push(stance);
   }
