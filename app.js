@@ -70,35 +70,170 @@ function boundaryFromFirestore(boundary) {
   return (boundary || []).map(b => Array.isArray(b) ? b : [b.lat, b.lng]);
 }
 
+/* =========================================================
+   저장/불러오기
+   - 현장 기본정보: Firestore "dashboard/sites_v1" 문서 하나 (가벼운 데이터만)
+   - 접촉현황 데이터(접촉기록·스냅샷·명부현황): 현장별로 압축해서
+     "dashboard" 컬렉션의 "contact_현장ID" 문서들에 따로 저장
+     (예전엔 한 문서에 모두 넣어서 1MB 제한·중첩배열 오류로 저장이 실패하고,
+      다시 열면 예전 데이터로 되돌아가는 문제가 있었음)
+   ========================================================= */
+const HEAVY_KEYS = ["contacts", "stanceSnapshots", "registryStats"];
+const HEAVY_LOCAL_PREFIX = "dashboard_contact_v2_";
+const HEAVY_CHUNK = 700000;
+const _heavySaved = {};      // siteId -> 마지막으로 저장한 JSON (변경 없으면 다시 안 올림)
+let _savePending = false;
+
+// 기존 "dashboard" 컬렉션 안에 "contact_현장ID" 문서로 저장 (보안규칙을 따로 고칠 필요 없음)
+function contactDataCol() {
+  const col = firestoreSitesDoc.parent;
+  return { doc: id => col.doc("contact_" + id) };
+}
+function splitSite(s) {
+  const light = { ...s }, heavy = {};
+  HEAVY_KEYS.forEach(k => { if (k in light) { heavy[k] = light[k]; delete light[k]; } });
+  return { light, heavy };
+}
+function bytesToB64(bytes) {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+function b64ToBytes(b64) {
+  const bin = atob(b64); const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+async function packJson(str) {
+  if (typeof CompressionStream === "undefined") return "raw:" + str;
+  const stream = new Blob([str]).stream().pipeThrough(new CompressionStream("gzip"));
+  return "gz:" + bytesToB64(new Uint8Array(await new Response(stream).arrayBuffer()));
+}
+async function unpackJson(s) {
+  if (!s) return null;
+  if (s.startsWith("raw:")) return s.slice(4);
+  const stream = new Blob([b64ToBytes(s.slice(3))]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return await new Response(stream).text();
+}
+
+/* 저장 상태 표시 (화면 오른쪽 아래) */
+function showSaveStatus(text, kind) {
+  let el = document.getElementById("saveStatusToast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "saveStatusToast";
+    el.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:99999;padding:9px 14px;border-radius:8px;font-size:13px;box-shadow:0 4px 14px rgba(0,0,0,.18);transition:opacity .3s;max-width:360px;line-height:1.45";
+    document.body.appendChild(el);
+  }
+  const colors = { ok: ["#ecfdf5", "#065f46"], saving: ["#eff6ff", "#1e3a8a"], error: ["#fef2f2", "#991b1b"] }[kind] || ["#f1f5f9", "#334155"];
+  el.style.background = colors[0]; el.style.color = colors[1]; el.style.border = `1px solid ${colors[1]}33`;
+  el.textContent = text; el.style.opacity = "1";
+  clearTimeout(el._t);
+  if (kind === "ok") el._t = setTimeout(() => { el.style.opacity = "0"; }, 2500);
+}
+
+async function saveHeavyForSite(siteId, heavy) {
+  const json = JSON.stringify(heavy);
+  if (_heavySaved[siteId] === json) return false;
+  const packed = await packJson(json);
+  try { localStorage.setItem(HEAVY_LOCAL_PREFIX + siteId, packed); } catch (e) { console.warn("로컬 캐시 저장 실패", e); }
+  const col = contactDataCol();
+  const parts = [];
+  for (let i = 0; i < packed.length; i += HEAVY_CHUNK) parts.push(packed.slice(i, i + HEAVY_CHUNK));
+  // 조각을 먼저 쓰고 마지막에 안내 문서를 써서, 읽는 쪽이 반쯤 저장된 상태를 보지 않게 함
+  const version = Date.now().toString(36);
+  for (let i = 0; i < parts.length; i++) {
+    await col.doc(`${siteId}__${version}__${i}`).set({ d: parts[i] });
+  }
+  const metaRef = col.doc(siteId);
+  const old = await metaRef.get().catch(() => null);
+  await metaRef.set({ version, parts: parts.length, size: json.length, updatedAt: new Date().toISOString() });
+  // 이전 버전 조각 정리
+  if (old && old.exists) {
+    const o = old.data();
+    for (let i = 0; i < (o.parts || 0); i++) col.doc(`${siteId}__${o.version}__${i}`).delete().catch(() => {});
+  }
+  _heavySaved[siteId] = json;
+  return true;
+}
+
+async function loadHeavyForSite(siteId) {
+  const col = contactDataCol();
+  const meta = await col.doc(siteId).get();
+  if (!meta.exists) return null;
+  const { version, parts } = meta.data();
+  const docs = await Promise.all(Array.from({ length: parts }, (_, i) => col.doc(`${siteId}__${version}__${i}`).get()));
+  const packed = docs.map(d => (d.exists ? d.data().d : "")).join("");
+  try { localStorage.setItem(HEAVY_LOCAL_PREFIX + siteId, packed); } catch (e) {}
+  const json = await unpackJson(packed);
+  _heavySaved[siteId] = json;
+  return JSON.parse(json);
+}
+async function loadHeavyFromLocal(siteId) {
+  try {
+    const packed = localStorage.getItem(HEAVY_LOCAL_PREFIX + siteId);
+    if (!packed) return null;
+    return JSON.parse(await unpackJson(packed));
+  } catch (e) { return null; }
+}
+
 async function loadSites() {
+  let fromCloud = false;
   try {
     const snap = await firestoreSitesDoc.get();
     if (snap.exists) {
       const raw = Array.isArray(snap.data().sites) ? snap.data().sites : [];
       sites = raw.map(s => ({ ...s, boundary: boundaryFromFirestore(s.boundary) }));
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(sites));
-      return;
+      fromCloud = true;
     }
   } catch (e) {
     console.warn("Firebase에서 현장 데이터를 못 불러왔습니다. 로컬 캐시를 사용합니다.", e);
   }
-  try { sites = JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
-  catch (e) { sites = []; }
+  if (!fromCloud) {
+    try { sites = JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
+    catch (e) { sites = []; }
+  }
+  // 현장별 접촉현황 데이터 붙이기
+  await Promise.all(sites.map(async s => {
+    let heavy = null;
+    if (fromCloud) { try { heavy = await loadHeavyForSite(s.id); } catch (e) { console.warn("접촉현황 불러오기 실패", s.id, e); } }
+    if (!heavy) heavy = await loadHeavyFromLocal(s.id);
+    if (heavy) HEAVY_KEYS.forEach(k => { if (heavy[k] !== undefined) s[k] = heavy[k]; });
+  }));
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(sites.map(s => splitSite(s).light))); } catch (e) {}
 }
 
 let _firestoreSyncTimer = null;
 function persist() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(sites));
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(sites.map(s => splitSite(s).light))); }
+  catch (e) { console.warn("로컬 저장 실패", e); }
+  _savePending = true;
   clearTimeout(_firestoreSyncTimer);
   _firestoreSyncTimer = setTimeout(async () => {
+    let heavyChanged = false;
     try {
-      const sanitized = sites.map(s => ({ ...s, boundary: boundaryToFirestore(s.boundary) }));
+      for (const s of sites) {
+        const { heavy } = splitSite(s);
+        if (Object.keys(heavy).length) {
+          if (!_heavySaved[s.id]) showSaveStatus("접촉현황 저장 중…", "saving");
+          if (await saveHeavyForSite(s.id, heavy)) heavyChanged = true;
+        }
+      }
+      const sanitized = sites.map(s => { const { light } = splitSite(s); return { ...light, boundary: boundaryToFirestore(light.boundary) }; });
       await firestoreSitesDoc.set({ sites: sanitized, updatedAt: new Date().toISOString() });
+      _savePending = false;
+      if (heavyChanged) showSaveStatus("✔ 저장 완료 (다른 PC에서도 보입니다)", "ok");
     } catch (e) {
-      console.warn("Firebase에 현장 데이터 저장 실패(로컬에는 저장됨):", e);
+      _savePending = false;
+      console.warn("Firebase 저장 실패(이 PC에는 저장됨):", e);
+      showSaveStatus("⚠ 서버 저장 실패 — 이 PC에만 저장됐습니다. 인터넷 연결을 확인하고 다시 시도해주세요. (" + (e.code || e.message || "") + ")", "error");
     }
   }, 600);
 }
+window.addEventListener("beforeunload", e => {
+  if (_savePending) { e.preventDefault(); e.returnValue = "아직 저장 중입니다."; }
+});
+
 function uid() {
   return "s_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
