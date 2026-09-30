@@ -27,7 +27,7 @@ function leaseRoleOf(v) {
   if (!s || /후보|탈락|낙선|당선|사퇴/.test(s)) return "";
   return LEASE_ROLES.find(r => s.includes(r)) ? s : "";
 }
-const CONTACT_TAB_VERSION = "2026-09-30 v10";
+const CONTACT_TAB_VERSION = "2026-09-30 v11";
 
 /* 모든 막대/선 그래프 위에 숫자 값을 표시하는 공통 플러그인 (도넛 차트는 제외) */
 if (typeof Chart !== "undefined" && !Chart._ctValueLabelsRegistered) {
