@@ -89,6 +89,12 @@ function ensureContactData(site) {
     const fixed = cleanStance(c.stance);
     if ((c.stance || "미정") !== fixed) { c.stance = fixed; migrated = true; }
   });
+  // 예전에 "단순", "tm" 등으로 저장돼 통계에서 빠지던 접촉방법을 표준값으로 정리
+  site.contacts.forEach(c => {
+    if (!c.method) return;
+    const m = normalizeMethod(c.method);
+    if (m !== c.method) { c.method = m; migrated = true; }
+  });
   if (migrated) persist();
 }
 
@@ -119,6 +125,20 @@ function parseMethod(v) {
   for (const [method, aliases] of METHOD_ALIASES) if (aliases.includes(s)) return method;
   for (const [method, aliases] of METHOD_ALIASES) if (aliases.some(a => a.length > 1 && s.includes(a))) return method;
   return "";
+}
+
+/* 머리글용: 한 글자 약어(상/부 등)는 친밀도 "상"과 헷갈리므로 제외하고 판별 */
+function parseMethodStrict(v) {
+  const s = String(v ?? "").replace(/\s/g, "").toLowerCase();
+  if (!s) return "";
+  for (const [method, aliases] of METHOD_ALIASES) if (aliases.some(a => a.length > 1 && a === s)) return method;
+  return "";
+}
+/* 명단/표에 저장된 접촉방법을 표준값으로 (예: "단순" → "단순상담", "tm" → "TM") */
+function normalizeMethod(v) {
+  const raw = String(v ?? "").trim();
+  if (!raw) return "";
+  return parseMethod(raw) || raw;
 }
 
 /* [수정 #12] 동명이인 구분: 이름 + 생년월일(있을 때) */
@@ -1215,7 +1235,7 @@ function importContactExcel(site, binary) {
         role: String(row["직책"] || "").trim(),
         phone: String(row["연락처"] || "").trim(),
         address: String(row["주소"] || "").trim(),
-        method: String(row["접촉방법"] || "").trim(),
+        method: normalizeMethod(row["접촉방법"] || row["접촉방식"]),
         stance: cleanStance(row["성향"]),
         level: CONTACT_LEVELS.includes(levelRaw) ? levelRaw : "하",
         note: String(row["특이사항"] || "").trim(),
@@ -1393,6 +1413,7 @@ function importMasterRegistryExcel(site, binary) {
   }
   const intimacyEnd = surveyStart > intimacyStart ? surveyStart : intimacyStart + 3;
 
+
   // 날짜 칸: 헤더 행(1~4행)에서 "엑셀 날짜 일련번호로 보이는 숫자"(대략 2009~2064년 범위)를 가진 열을 모두 찾음.
   // (화면엔 "1","2"처럼 보여도 실제로는 날짜값인 경우까지 정확히 잡기 위해, 서식 자동판별에 의존하지 않고 직접 계산합니다.)
   let dateCols = [];
@@ -1406,6 +1427,21 @@ function importMasterRegistryExcel(site, binary) {
   }
   if (!dateCols.length) { alert("날짜별 접촉 칸을 찾지 못했습니다."); return; }
   const dateHeaderRow = headerRows[dateHeaderRowIdx];
+
+  // 접촉방법이 "상담 / 단순 / TM / 거부 …" 머리글 칸에 표시(1, ○ 등)하는 형태일 때 그 칸들을 찾음
+  const methodLabelCols = [];
+  {
+    const dateSet = new Set(dateCols);
+    const maxCols = Math.max(0, ...headerRows.map(r => (r ? r.length : 0)));
+    for (let c = 0; c < maxCols; c++) {
+      if (dateSet.has(c)) continue;
+      if (c >= stanceStart && c < intimacyEnd) continue; // 성향·친밀도 영역 제외
+      for (const r of headerRows) {
+        const m = r ? parseMethodStrict(cleanHeader(r[c])) : "";
+        if (m) { methodLabelCols.push([c, m]); break; }
+      }
+    }
+  }
 
   // [수정] 성향/친밀도 라벨 줄을 "라벨이 가장 많이 들어있는 줄"로 고름
   // (예전엔 첫 번째로 값이 있는 줄을 골라서, 날짜·숫자 줄을 라벨로 잘못 읽는 경우가 있었음)
@@ -1458,6 +1494,8 @@ function importMasterRegistryExcel(site, binary) {
     }
 
     let personHasContact = false;
+    const blockHit = methodLabelCols.find(([c]) => row[c]);
+    const rowBlockMethod = blockHit ? blockHit[1] : "";
     dateCols.forEach(c => {
       const v = row[c];
       if (!v) return;
@@ -1469,6 +1507,7 @@ function importMasterRegistryExcel(site, binary) {
       // [수정] 날짜 칸에 적힌 접촉방식 읽기 (예: 상담, 단순, TM, 거부, 부재)
       let method = parseMethod(v);
       if (!method && methodCol >= 0) method = parseMethod(row[methodCol]);
+      if (!method && rowBlockMethod) method = rowBlockMethod;
       if (method) methodKnown++;
       else { const sv = String(v).trim(); unknownMethodVals[sv] = (unknownMethodVals[sv] || 0) + 1; }
       if (existingKeys.has(key)) {
@@ -1517,7 +1556,7 @@ function importMasterRegistryExcel(site, binary) {
   persist();
   refreshContactViews(site, { companies: true });
   const unk = Object.entries(unknownMethodVals).sort((a, b) => b[1] - a[1]);
-  let methodMsg = `\n· 접촉방식 인식: ${methodKnown}건` + (methodFilled ? ` (기존 기록 ${methodFilled}건 접촉방식 보충)` : "");
+  let methodMsg = `\n· 접촉방식 인식: ${methodKnown}건` + (methodLabelCols.length ? ` [머리글 칸: ${methodLabelCols.map(x => x[1]).join("/")}]` : "") + (methodFilled ? ` (기존 기록 ${methodFilled}건 접촉방식 보충)` : "");
   if (unk.length) methodMsg += `\n· 접촉방식을 알 수 없는 칸 값: ${unk.slice(0, 8).map(([v, n]) => `"${v}" ${n}건`).join(", ")}${unk.length > 8 ? " …" : ""}\n  → 이 값들은 "구분없음"으로 집계됩니다. 각 값이 어떤 방식인지 알려주시면 추가해 드릴게요.`;
   alert(`"${targetSheet}" 시트 반영 완료\n\n· 새 접촉 기록: ${peopleTouched.size}명, ${added}건${added ? "" : " (이미 반영된 날짜만 있음)"}${methodMsg}\n· 성향/친밀도 스냅샷: ${personRows.length}명 (기준일 ${asOf})\n· 이전 대비 성향/친밀도가 바뀐 사람: ${changed}명`);
 }
