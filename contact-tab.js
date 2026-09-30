@@ -20,7 +20,7 @@ const DEFAULT_EVENT_TYPES = ["투어", "간담회", "설문조사"];
 const EVENT_COLORS = ["#378add", "#d85a30", "#1d9e75", "#8b5cf6", "#f59e0b"];
 const PERIOD_MODES = [["day", "일별"], ["week", "주별"], ["month", "월별"]];
 const REGISTRY_PARSER_VERSION = 3;
-const CONTACT_TAB_VERSION = "2026-09-30 v7";
+const CONTACT_TAB_VERSION = "2026-09-30 v8";
 
 /* 모든 막대/선 그래프 위에 숫자 값을 표시하는 공통 플러그인 (도넛 차트는 제외) */
 if (typeof Chart !== "undefined" && !Chart._ctValueLabelsRegistered) {
@@ -373,14 +373,19 @@ function renderContactTab(site) {
 
     <div class="detail-card">
       <div class="detail-card-head">
-        <h4>인원별 주차별 접촉 현황 <span class="hint" style="font-weight:400">(1주=1~7일, 2주=8~14일 … 5주=29일~말일)</span></h4>
+        <h4>주차별 접촉 현황 <span class="hint" style="font-weight:400">(명부 KE~KI열과 같은 주차: 월~일, 1주 = 1일이 속한 주)</span></h4>
         <select id="ctWeeklyMonthSelect" style="border:1px solid var(--slate-300);border-radius:6px;padding:5px 8px;font-size:12px"></select>
       </div>
+      <p class="hint" id="ctWeekRangeHint" style="margin:-4px 0 10px"></p>
       <div id="ctWeeklyMetrics" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px"></div>
+      <div style="font-size:12.5px;font-weight:700;margin-bottom:6px">담당별 주차별 접촉 인원 <span class="hint" style="font-weight:400">(칸: 인원·건수 / 그 주 접촉방법 — 접촉=상담·단순·TM)</span></div>
+      <div id="ctWeeklySummary"></div>
+      <div style="position:relative;height:240px;margin-bottom:16px"><canvas id="ctWeeklyByChajangChart"></canvas></div>
+      <div style="font-size:12.5px;font-weight:700;margin-bottom:6px">인원별 주차별 접촉 <span class="hint" style="font-weight:400">(담당 이름을 눌러 펼치기)</span></div>
       <div id="ctWeeklyByChajang" style="margin-bottom:14px"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
         <div>
-          <div class="hint" style="margin-bottom:6px">이 달 주차별 총 접촉 건수</div>
+          <div class="hint" style="margin-bottom:6px">이 달 주차별 접촉 인원·건수</div>
           <div style="position:relative;height:180px"><canvas id="ctWeeklyChart"></canvas></div>
         </div>
         <div>
@@ -892,14 +897,28 @@ function rebuildMonthlyStatChart(site, rows) {
    자동 집계 — 별도 엑셀 업로드 없이 "전체 명부 엑셀 업로드"로 들어온
    데이터에서 바로 계산됩니다)
    ========================================================= */
-function weekOfMonthNum(dateStr) {
-  const day = Number(dateStr.slice(8, 10));
-  return Math.min(5, Math.ceil(day / 7));
+/* 주차 구분 (명부 KE~KI열과 같은 방식)
+   - 월요일~일요일을 한 주로 봄
+   - 1주 = 그 달 1일이 들어있는 주 (예: 9월 1주 = 8/31~9/6)
+   - 마지막 주는 말일까지 */
+function weekRangesOfMonth(monthKey) {
+  if (!/^\d{4}-\d{2}$/.test(monthKey || "")) return [];
+  const [y, m] = monthKey.split("-").map(Number);
+  const first = new Date(y, m - 1, 1);
+  const start = new Date(first); start.setDate(first.getDate() - ((first.getDay() + 6) % 7));
+  const last = new Date(y, m, 0);
+  const out = [];
+  for (let s = new Date(start); s <= last; s.setDate(s.getDate() + 7)) {
+    const e = new Date(s); e.setDate(e.getDate() + 6);
+    out.push({ start: formatDateLocal(s), end: formatDateLocal(e > last ? last : e) });
+  }
+  return out;
 }
-function roleLabel(c) {
-  if (c.type === "임대의원") return c.role ? c.role : "임대의원";
-  return "조합원";
+function weekIndexIn(ranges, dateStr) {
+  for (let i = 0; i < ranges.length; i++) if (dateStr >= ranges[i].start && dateStr <= ranges[i].end) return i + 1;
+  return 0;
 }
+function shortMD(d) { return `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`; }
 
 function renderWeeklyPersonSection(site) {
   const monthSel = document.getElementById("ctWeeklyMonthSelect");
@@ -916,20 +935,27 @@ function renderWeeklyPersonSection(site) {
     : `<option value="">데이터 없음</option>`;
   monthSel.onchange = () => { state.selectedWeeklyMonth = monthSel.value; renderWeeklyPersonSection(site); };
 
+  const ranges = weekRangesOfMonth(state.selectedWeeklyMonth);
+  const W = ranges.map((_, i) => i + 1);
+  const wkLabel = i => `${i + 1}주`;
+  const wkRange = i => `${shortMD(ranges[i].start)}~${shortMD(ranges[i].end)}`;
+  document.getElementById("ctWeekRangeHint").textContent = ranges.length
+    ? ranges.map((r, i) => `${i + 1}주 ${shortMD(r.start)}~${shortMD(r.end)}`).join(" · ") : "";
+
   const monthContacts = contacts
-    .filter(c => monthKeyOf(c.date) === state.selectedWeeklyMonth && isValidDateStr(c.date))
+    .filter(c => isValidDateStr(c.date) && ranges.length && c.date >= ranges[0].start && c.date <= ranges[ranges.length - 1].end)
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  // 사람별로 묶기 (이름+생년월일 기준 — 수정 #12)
+  // 사람별로 묶기 (이름+생년월일)
   const byKey = {};
   monthContacts.forEach(c => {
     if (!c.name) return;
     const k = personKey(c);
-    const p = (byKey[k] = byKey[k] || { name: personLabel(c, site.contacts), chajang: c.chajang, type: c.type, role: c.role, weeks: {}, total: 0 });
-    const wk = weekOfMonthNum(c.date);
+    const p = (byKey[k] = byKey[k] || { key: k, name: personLabel(c, site.contacts), chajang: c.chajang, type: c.type, role: c.role, weeks: {}, methods: {}, total: 0 });
+    const wk = weekIndexIn(ranges, c.date);
     p.weeks[wk] = (p.weeks[wk] || 0) + 1;
+    (p.methods[wk] = p.methods[wk] || []).push(c.method || "");
     p.total += 1;
-    // 가장 최근 기록의 담당/구분을 사용
     p.chajang = c.chajang || p.chajang;
     p.type = c.type || p.type;
   });
@@ -939,84 +965,146 @@ function renderWeeklyPersonSection(site) {
   const totalPeople = people.length;
   const totalCount = people.reduce((s, p) => s + p.total, 0);
   const leaseCount = people.filter(p => p.type === "임대의원").length;
-  document.getElementById("ctWeeklyMetrics").innerHTML = `
+  const card = (label, val, color) => `
     <div style="background:var(--paper);border-radius:8px;padding:10px 12px">
-      <div style="font-size:11.5px;color:var(--slate-500)">이 달 접촉 인원</div>
-      <div style="font-size:20px;font-weight:800">${totalPeople}명</div>
-    </div>
-    <div style="background:var(--paper);border-radius:8px;padding:10px 12px">
-      <div style="font-size:11.5px;color:var(--slate-500)">임대의원 / 조합원</div>
-      <div style="font-size:20px;font-weight:800">${leaseCount} / ${totalPeople - leaseCount}</div>
-    </div>
-    <div style="background:var(--paper);border-radius:8px;padding:10px 12px">
-      <div style="font-size:11.5px;color:var(--slate-500)">총 접촉 건수</div>
-      <div style="font-size:20px;font-weight:800;color:var(--accent)">${totalCount}건</div>
+      <div style="font-size:11.5px;color:var(--slate-500)">${label}</div>
+      <div style="font-size:20px;font-weight:800;${color ? `color:${color}` : ""}">${val}</div>
     </div>`;
+  document.getElementById("ctWeeklyMetrics").innerHTML =
+    card("이 달 접촉 인원", `${totalPeople}명`) +
+    card("임대의원 / 조합원", `${leaseCount} / ${totalPeople - leaseCount}`) +
+    card("총 접촉 건수", `${totalCount}건`, "var(--accent)");
 
-  // 차장별로 묶고, 그 안에서 임대의원/조합원으로 나눔
+  // ---- 담당별 주차별 요약표 (「염리4집계(주차별)」처럼) ----
   const byChajang = {};
   people.forEach(p => {
     const key = p.chajang || "(담당 미지정)";
-    if (!byChajang[key]) byChajang[key] = { 임대의원: [], 조합원: [] };
-    byChajang[key][p.type === "임대의원" ? "임대의원" : "조합원"].push(p);
+    const g = byChajang[key] = byChajang[key] || { 임대의원: [], 조합원: [], wkPeople: {}, wkCount: {}, wkGood: {}, wkRefuse: {}, wkAbsent: {} };
+    g[p.type === "임대의원" ? "임대의원" : "조합원"].push(p);
+    W.forEach(w => {
+      if (!p.weeks[w]) return;
+      g.wkPeople[w] = (g.wkPeople[w] || 0) + 1;
+      g.wkCount[w] = (g.wkCount[w] || 0) + p.weeks[w];
+      const ms = p.methods[w] || [];
+      if (ms.some(m => m === "상담" || m === "단순상담" || m === "TM")) g.wkGood[w] = (g.wkGood[w] || 0) + 1;
+      else if (ms.includes("거부")) g.wkRefuse[w] = (g.wkRefuse[w] || 0) + 1;
+      else if (ms.includes("부재")) g.wkAbsent[w] = (g.wkAbsent[w] || 0) + 1;
+    });
   });
   const chajangNames = Object.keys(byChajang).sort((a, b) => a.localeCompare(b));
 
-  const weeksHtml = p => [1, 2, 3, 4, 5].map(w => `<td style="text-align:right;padding:4px">${p.weeks[w] ? fmtNum(p.weeks[w]) : "-"}</td>`).join("");
+  // BB열(주차접촉) — 가장 최근 명부 기준 담당별 상담+단순+TM 인원
+  const regDates = registryDates(site);
+  const bb = {};
+  if (regDates.length) registryRows(site, regDates[regDates.length - 1]).forEach(x => {
+    if (["상담", "단순상담", "TM"].includes(x.weekMethod)) bb[x.chajang || "(담당 미지정)"] = (bb[x.chajang || "(담당 미지정)"] || 0) + 1;
+  });
+
+  const thS = "text-align:right;padding:5px 4px;color:var(--slate-500);white-space:nowrap";
+  const sumW = f => W.map(w => chajangNames.reduce((s, n) => s + (byChajang[n][f][w] || 0), 0));
+  const cellW = (g, w) => g.wkPeople[w]
+    ? `<b>${g.wkPeople[w]}</b><span style="color:var(--slate-500);font-size:11px">명·${g.wkCount[w]}건</span>`
+      + `<div style="font-size:10.5px;color:var(--slate-500)">접촉${g.wkGood[w] || 0}·거부${g.wkRefuse[w] || 0}·부재${g.wkAbsent[w] || 0}</div>`
+    : `<span style="color:var(--slate-300)">-</span>`;
+  const totP = sumW("wkPeople"), totC = sumW("wkCount"), totG = sumW("wkGood"), totR = sumW("wkRefuse"), totA = sumW("wkAbsent");
+  document.getElementById("ctWeeklySummary").innerHTML = chajangNames.length ? `
+    <div style="overflow-x:auto;margin-bottom:14px">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="border-bottom:1px solid var(--slate-300)">
+          <th style="text-align:left;padding:5px 4px;color:var(--slate-500)">담당</th>
+          ${W.map((w, i) => `<th style="${thS}">${wkLabel(i)}<div style="font-weight:400;font-size:10.5px">${wkRange(i)}</div></th>`).join("")}
+          <th style="${thS}">이 달 인원</th>
+          ${regDates.length ? `<th style="${thS}" title="명부 BB열(주차접촉)이 상담·단순·TM인 인원">BB 주차접촉<div style="font-weight:400;font-size:10.5px">${regDates[regDates.length - 1]}</div></th>` : ""}
+        </tr></thead>
+        <tbody>
+          ${chajangNames.map(n => {
+            const g = byChajang[n];
+            return `<tr style="border-bottom:1px solid var(--slate-100)">
+              <td style="padding:4px;white-space:nowrap">${esc(n)}</td>
+              ${W.map(w => `<td style="text-align:right;padding:4px">${cellW(g, w)}</td>`).join("")}
+              <td style="text-align:right;padding:4px;font-weight:700">${g.임대의원.length + g.조합원.length}</td>
+              ${regDates.length ? `<td style="text-align:right;padding:4px;color:var(--accent);font-weight:700">${bb[n] || 0}</td>` : ""}
+            </tr>`;
+          }).join("")}
+          <tr style="border-top:2px solid var(--slate-300);font-weight:700">
+            <td style="padding:4px">합계</td>
+            ${W.map((w, i) => `<td style="text-align:right;padding:4px">${totP[i]}<span style="color:var(--slate-500);font-size:11px;font-weight:400">명·${totC[i]}건</span><div style="font-size:10.5px;color:var(--slate-500);font-weight:400">접촉${totG[i]}·거부${totR[i]}·부재${totA[i]}</div></td>`).join("")}
+            <td style="text-align:right;padding:4px">${totalPeople}</td>
+            ${regDates.length ? `<td style="text-align:right;padding:4px;color:var(--accent)">${Object.values(bb).reduce((a, b) => a + b, 0)}</td>` : ""}
+          </tr>
+        </tbody>
+      </table>
+    </div>` : `<p class="hint">이 달 접촉 기록이 없습니다.</p>`;
+
+  // ---- 사람별 표 ----
+  const weeksHtml = p => W.map(w => `<td style="text-align:right;padding:4px">${p.weeks[w] ? fmtNum(p.weeks[w]) : "-"}</td>`).join("");
   function miniTable(title, list) {
     const sum = list.reduce((s, p) => s + p.total, 0);
-    const wkSum = [1, 2, 3, 4, 5].map(w => list.reduce((s, p) => s + (p.weeks[w] || 0), 0));
+    const wkSum = W.map(w => list.reduce((s, p) => s + (p.weeks[w] || 0), 0));
     return `
-      <div style="flex:1;min-width:280px">
+      <div style="flex:1;min-width:300px">
         <div style="font-size:12.5px;font-weight:700;margin-bottom:6px">${title} <span style="color:var(--slate-500);font-weight:400">(${list.length}명 · ${sum}건)</span></div>
         <table style="width:100%;border-collapse:collapse;font-size:12px">
           <thead>
             <tr style="border-bottom:1px solid var(--slate-300)">
               <th style="text-align:left;padding:4px;color:var(--slate-500)">이름</th>
-              ${[1, 2, 3, 4, 5].map(w => `<th style="text-align:right;padding:4px;color:var(--slate-500)">${w}주</th>`).join("")}
+              ${W.map((w, i) => `<th style="text-align:right;padding:4px;color:var(--slate-500)" title="${wkRange(i)}">${wkLabel(i)}</th>`).join("")}
               <th style="text-align:right;padding:4px;color:var(--slate-500);font-weight:700">합계</th>
             </tr>
           </thead>
           <tbody>
             ${list.map(p => `<tr style="border-bottom:1px solid var(--slate-100)"><td style="padding:4px">${esc(p.name)}${p.role && p.type === "임대의원" && p.role !== "임대의원" ? ` <span style="color:var(--slate-500);font-size:11px">${esc(p.role)}</span>` : ""}</td>${weeksHtml(p)}<td style="text-align:right;padding:4px;font-weight:700">${fmtNum(p.total)}</td></tr>`).join("")
-              || `<tr><td colspan="7" style="padding:8px 4px;color:var(--slate-500)">없음</td></tr>`}
+              || `<tr><td colspan="${W.length + 2}" style="padding:8px 4px;color:var(--slate-500)">없음</td></tr>`}
             ${list.length > 1 ? `<tr style="border-top:1px solid var(--slate-300);font-weight:700"><td style="padding:4px">소계</td>${wkSum.map(v => `<td style="text-align:right;padding:4px">${v || "-"}</td>`).join("")}<td style="text-align:right;padding:4px">${sum}</td></tr>` : ""}
           </tbody>
         </table>
       </div>`;
   }
-
-  const container = document.getElementById("ctWeeklyByChajang");
-  container.innerHTML = chajangNames.map(name => {
+  document.getElementById("ctWeeklyByChajang").innerHTML = chajangNames.map(name => {
     const g = byChajang[name];
     return `
-      <div style="border:1px solid var(--slate-100);border-radius:8px;padding:12px;margin-bottom:12px">
-        <div style="font-size:13.5px;font-weight:800;margin-bottom:10px">👤 ${esc(name)}</div>
-        <div style="display:flex;gap:20px;flex-wrap:wrap">
+      <details style="border:1px solid var(--slate-100);border-radius:8px;padding:10px 12px;margin-bottom:10px" ${chajangNames.length === 1 ? "open" : ""}>
+        <summary style="font-size:13.5px;font-weight:800;cursor:pointer">👤 ${esc(name)} <span style="font-weight:400;font-size:12px;color:var(--slate-500)">임대의원 ${g.임대의원.length}명 · 조합원 ${g.조합원.length}명</span></summary>
+        <div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:10px">
           ${miniTable("임대의원", g.임대의원)}
           ${miniTable("조합원", g.조합원)}
         </div>
-      </div>`;
-  }).join("") || `<p class="hint">이 달 접촉 기록이 없습니다.</p>`;
+      </details>`;
+  }).join("");
 
-  rebuildWeeklyCharts(site, people, months);
+  rebuildWeeklyCharts(site, people, months, { W, ranges, byChajang, chajangNames });
 }
 
-function rebuildWeeklyCharts(site, people, months) {
+function rebuildWeeklyCharts(site, people, months, wk) {
   if (typeof Chart === "undefined") return;
   const key = site.id;
   if (!_contactCharts[key]) _contactCharts[key] = {};
-  if (_contactCharts[key].weekly) _contactCharts[key].weekly.destroy();
-  if (_contactCharts[key].monthlyTrend) _contactCharts[key].monthlyTrend.destroy();
+  ["weekly", "monthlyTrend", "weeklyByChajang"].forEach(k => { if (_contactCharts[key][k]) _contactCharts[key][k].destroy(); });
+  const { W, ranges, byChajang, chajangNames } = wk;
+  const WEEK_COLORS = ["#93c5fd", "#60a5fa", "#378add", "#1d6fb8", "#1e4f8a", "#0f2f57"];
 
-  const weekTotals = [1, 2, 3, 4, 5].map(w => people.reduce((s, p) => s + (p.weeks[w] || 0), 0));
+  // 담당별 주차별 접촉 인원 (나란히 막대)
+  _contactCharts[key].weeklyByChajang = new Chart(document.getElementById("ctWeeklyByChajangChart"), {
+    type: "bar",
+    data: {
+      labels: chajangNames,
+      datasets: W.map((w, i) => ({ label: `${w}주 (${shortMD(ranges[i].start)}~${shortMD(ranges[i].end)})`, data: chajangNames.map(n => byChajang[n].wkPeople[w] || 0), backgroundColor: WEEK_COLORS[i % WEEK_COLORS.length], borderRadius: 4 }))
+    },
+    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+  });
+
+  const weekTotals = W.map(w => people.reduce((s, p) => s + (p.weeks[w] || 0), 0));
+  const weekPeople = W.map(w => people.filter(p => p.weeks[w]).length);
   _contactCharts[key].weekly = new Chart(document.getElementById("ctWeeklyChart"), {
     type: "bar",
     data: {
-      labels: ["1주", "2주", "3주", "4주", "5주"],
-      datasets: [{ label: "접촉 건수", data: weekTotals, backgroundColor: "#378add", borderRadius: 4 }]
+      labels: W.map((w, i) => `${w}주 ${shortMD(ranges[i].start)}~`),
+      datasets: [
+        { label: "접촉 인원", data: weekPeople, backgroundColor: "#378add", borderRadius: 4 },
+        { label: "접촉 건수", data: weekTotals, backgroundColor: "#1d9e75", borderRadius: 4 }
+      ]
     },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
   });
 
   const sc = selectedContacts(site);
