@@ -27,7 +27,7 @@ function leaseRoleOf(v) {
   if (!s || /후보|탈락|낙선|당선|사퇴/.test(s)) return "";
   return LEASE_ROLES.find(r => s.includes(r)) ? s : "";
 }
-const CONTACT_TAB_VERSION = "2026-09-30 v9";
+const CONTACT_TAB_VERSION = "2026-09-30 v10";
 
 /* 모든 막대/선 그래프 위에 숫자 값을 표시하는 공통 플러그인 (도넛 차트는 제외) */
 if (typeof Chart !== "undefined" && !Chart._ctValueLabelsRegistered) {
@@ -307,6 +307,227 @@ function printContactTab(size) {
   window.print();
 }
 
+/* =========================================================
+   보고서 출력 — 화면(인터넷 창) 그대로가 아니라, 보고용 양식으로 새로 만들어 인쇄
+   - 표는 표로, 그래프는 이미지로 정리
+   - 브라우저가 붙이는 주소/날짜 머리글·바닥글이 나오지 않도록 여백을 페이지 안에서 처리
+   ========================================================= */
+function chartImage(ch) {
+  if (!ch) return "";
+  try {
+    const prev = ch.options.animation;
+    ch.options.animation = false;
+    ch.update("none");
+    ch.resize();   // 방금 다시 그린 그래프가 빈 이미지로 찍히지 않도록 강제로 그림
+    ch.draw();
+    const url = ch.toBase64Image("image/png", 1);
+    ch.options.animation = prev;
+    return url;
+  } catch (e) { return ""; }
+}
+/* 보고서용: 화면 그래프와 같은 내용을 인쇄에 맞는 크기로 따로 그려서 이미지로 만듦 */
+function chartImageSized(ch, w, h) {
+  if (!ch) return "";
+  const box = document.createElement("div");
+  box.style.cssText = `position:fixed;left:-10000px;top:0;width:${w}px;height:${h}px`;
+  const cv = document.createElement("canvas");
+  cv.width = w; cv.height = h; cv.style.width = w + "px"; cv.style.height = h + "px";
+  box.appendChild(cv);
+  document.body.appendChild(box);
+  let url = "";
+  try {
+    const data = JSON.parse(JSON.stringify({ labels: ch.data.labels, datasets: ch.data.datasets.map(d => {
+      const o = {}; Object.keys(d).forEach(k => { if (!k.startsWith("_") && typeof d[k] !== "function") o[k] = d[k]; }); return o; }) }));
+    const opts = Object.assign({}, ch.config.options, { responsive: false, maintainAspectRatio: false, animation: false, devicePixelRatio: 2 });
+    opts.plugins = Object.assign({}, ch.config.options.plugins, { legend: Object.assign({}, ch.config.options.plugins?.legend, { labels: { font: { size: 13 } } }) });
+    const tmp = new Chart(cv, { type: ch.config.type, data, options: opts });
+    url = tmp.toBase64Image("image/png", 1);
+    tmp.destroy();
+  } catch (e) { url = chartImage(ch); }
+  box.remove();
+  return url;
+}
+function cloneTableHtml(el) {
+  if (!el) return "";
+  const c = el.cloneNode(true);
+  c.querySelectorAll("[style]").forEach(n => n.removeAttribute("style"));
+  c.removeAttribute("style");
+  c.removeAttribute("id");
+  return c.outerHTML;
+}
+
+function buildContactReportHtml(site, size) {
+  const state = contactStateFor(site.id);
+  const charts = _contactCharts[site.id] || {};
+  const filterLabel = state.selectedChajang.size ? `담당: ${[...state.selectedChajang].join(", ")}` : "전체 담당";
+  const regDates = registryDates(site);
+  const regDate = state.selectedRegDate || regDates[regDates.length - 1] || "";
+  const printedAt = todayStr();
+
+  // 1) 담당별 현황: 누계/주차 두 가지를 모두 캡처한 뒤 원래 모드로 되돌림
+  const origMode = state.regMode || "cum";
+  const reg = {};
+  if (regDates.length) {
+    ["cum", "week"].forEach(mode => {
+      state.regMode = mode;
+      renderRegistryStatusSection(site);
+      reg[mode] = { table: cloneTableHtml(document.getElementById("ctRegTable")), img: chartImageSized(_contactCharts[site.id]?.reg, 1500, 380) };
+    });
+    state.regMode = origMode;
+    renderRegistryStatusSection(site);
+  }
+
+  // 2) 요약 수치
+  const rows = regDates.length ? registryRows(site, regDate) : [];
+  const total = rows.length;
+  const cumGood = rows.filter(x => ["상담", "단순상담", "TM"].includes(x.cumMethod)).length;
+  const weekGood = rows.filter(x => ["상담", "단순상담", "TM"].includes(x.weekMethod)).length;
+  const lease = rows.filter(x => x.type === "임대의원").length;
+  const metricsText = [...document.querySelectorAll("#ctMetrics > div")].map(d => {
+    const t = d.querySelectorAll("div");
+    return { label: t[0]?.textContent || "", value: t[1]?.textContent || "" };
+  });
+  const kpi = [
+    ...(total ? [
+      { label: "조합원 (명부)", value: `${fmtNum(total)}명`, sub: `임대의원 ${lease}명` },
+      { label: "누계 접촉 (BA)", value: `${fmtNum(cumGood)}명`, sub: `접촉률 ${total ? (Math.round(cumGood / total * 1000) / 10) : 0}%` },
+      { label: "주차 접촉 (BB)", value: `${fmtNum(weekGood)}명`, sub: `접촉률 ${total ? (Math.round(weekGood / total * 1000) / 10) : 0}%` }
+    ] : []),
+    ...metricsText.filter(m => /지지|상승/.test(m.label)).map(m => ({ label: m.label, value: m.value, sub: "" }))
+  ];
+
+  const weekMonth = state.selectedWeeklyMonth || "";
+  const weekHint = document.getElementById("ctWeekRangeHint")?.textContent || "";
+  const weeklyTable = cloneTableHtml(document.querySelector("#ctWeeklySummary table"));
+  const monthlyTable = cloneTableHtml(document.getElementById("ctStatBody")?.closest("table"));
+  const img = (k, w = 1500, h = 420) => chartImageSized(charts[k], w, h);
+  const methodTitle = document.getElementById("ctMethodTitle")?.textContent || "접촉방법 통계";
+  const intimacyBoxes = [...document.querySelectorAll("#ctIntimacyBoxes > div")].map(d => d.innerText.replace(/\n+/g, " ")).join(" · ");
+
+  const figure = (title, src, h) => src ? `<div class="fig"><div class="fig-t">${esc(title)}</div><img src="${src}" style="max-height:${h}mm"></div>` : "";
+  const landscape = true;
+
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(site.name || "현장")} 접촉현황 보고</title>
+<style>
+  @page { size: ${size} ${landscape ? "landscape" : "portrait"}; margin: 0; }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { margin: 0; font-family: "Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo", sans-serif; color: #1e293b; font-size: 10.5pt; }
+  .page { padding: 11mm 14mm 9mm; break-after: page; page-break-after: always; }
+  .page:last-of-type { break-after: auto; page-break-after: auto; }
+  .head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2.5px solid #1e3a5f; padding-bottom: 6px; margin-bottom: 10px; }
+  .head h1 { font-size: 17pt; margin: 0; color: #1e3a5f; }
+  .head .meta { font-size: 9pt; color: #64748b; text-align: right; line-height: 1.5; }
+  h2 { font-size: 12pt; margin: 12px 0 6px; padding-left: 8px; border-left: 4px solid #378add; color: #1e3a5f; }
+  .hint { font-size: 8.5pt; color: #64748b; margin: -2px 0 6px; }
+  .kpis { display: grid; grid-template-columns: repeat(${Math.max(1, Math.min(5, kpi.length))}, 1fr); gap: 8px; margin: 6px 0 4px; }
+  .kpi { border: 1px solid #cbd5e1; border-radius: 6px; padding: 7px 10px; }
+  .kpi .l { font-size: 8.5pt; color: #64748b; }
+  .kpi .v { font-size: 15pt; font-weight: 800; color: #1e3a5f; }
+  .kpi .s { font-size: 8.5pt; color: #64748b; }
+  table { width: 100%; border-collapse: collapse; font-size: 8.5pt; page-break-inside: auto; }
+  th, td { border: 1px solid #cbd5e1; padding: 2px 5px; text-align: right; }
+  th { background: #eef2f7; color: #334155; font-weight: 700; text-align: center; }
+  td:first-child, th:first-child { text-align: left; }
+  tr { page-break-inside: avoid; }
+  tbody tr:last-child td { font-weight: 700; background: #f8fafc; }
+  td div, th div { font-size: 7.5pt; color: #64748b; font-weight: 400; }
+  .fig { page-break-inside: avoid; margin: 6px 0; }
+  .fig-t { font-size: 9.5pt; font-weight: 700; margin-bottom: 3px; color: #334155; }
+  .fig img { display: block; max-width: 100%; width: auto; margin: 0 auto; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
+  .foot { margin-top: 8px; font-size: 8pt; color: #94a3b8; text-align: right; }
+</style></head><body>
+
+<div class="page">
+  <div class="head">
+    <h1>${esc(site.name || "현장")} 접촉현황 보고</h1>
+    <div class="meta">명부 기준일 ${esc(regDate || "-")} · ${esc(filterLabel)}<br>출력일 ${printedAt}</div>
+  </div>
+  ${kpi.length ? `<div class="kpis">${kpi.map(k => `<div class="kpi"><div class="l">${esc(k.label)}</div><div class="v">${esc(k.value)}</div>${k.sub ? `<div class="s">${esc(k.sub)}</div>` : ""}</div>`).join("")}</div>` : ""}
+  ${reg.cum ? `
+    <h2>담당별 접촉현황 — 누계 (명부 BA열)</h2>
+    <div class="hint">조합원(B열=1) 기준 담당별 인원 · 누계 = 상담+단순+TM</div>
+    ${reg.cum.table}` : `<p class="hint">명부가 업로드되지 않아 담당별 현황이 없습니다.</p>`}
+</div>
+
+${reg.week ? `
+<div class="page">
+  <div class="head"><h1>담당별 접촉현황 — 주차 (명부 BB열)</h1><div class="meta">명부 기준일 ${esc(regDate)} · ${esc(filterLabel)}</div></div>
+  ${reg.week.table}
+</div>
+
+<div class="page">
+  <div class="head"><h1>담당별 접촉방법 그래프</h1><div class="meta">명부 기준일 ${esc(regDate)} · ${esc(filterLabel)}</div></div>
+  ${figure("누계 (BA열) — 담당별 접촉방법 인원", reg.cum.img, 80)}
+  ${figure("주차 (BB열) — 담당별 접촉방법 인원", reg.week.img, 80)}
+</div>` : ""}
+
+${weeklyTable ? `
+<div class="page">
+  <div class="head"><h1>주차별 접촉 현황 — ${esc(weekMonth)}</h1><div class="meta">${esc(weekHint)}<br>${esc(filterLabel)}</div></div>
+  <div class="hint">칸: 접촉 인원·건수 / 그 주 접촉방법 (접촉=상담·단순·TM)</div>
+  ${weeklyTable}
+</div>
+
+<div class="page">
+  <div class="head"><h1>주차별 접촉 그래프 — ${esc(weekMonth)}</h1><div class="meta">${esc(filterLabel)}</div></div>
+  ${figure("담당별 주차별 접촉 인원", img("weeklyByChajang", 1500, 420), 85)}
+  <div class="grid2">
+    ${figure("이 달 주차별 접촉 인원·건수", img("weekly", 900, 420), 62)}
+    ${figure("월별 총 접촉 건수 추이", img("monthlyTrend", 900, 420), 62)}
+  </div>
+</div>` : ""}
+
+<div class="page">
+  <div class="head"><h1>접촉방법 · 성향 · 친밀도</h1><div class="meta">${esc(filterLabel)}</div></div>
+  <div class="grid2">
+    ${figure(methodTitle, img("method", 900, 480), 78)}
+    ${figure("현재 시공사 지지 분포", img("stance", 900, 480), 78)}
+    ${figure("시공사 지지 성향 변화 (월말 기준, 인원 비율)", img("sentiment", 900, 480), 78)}
+    ${figure("친밀도 분포 (월말 기준 인원)", img("intimacy", 900, 480), 78)}
+  </div>
+  ${intimacyBoxes ? `<div class="hint" style="margin-top:4px">친밀도 변화: ${esc(intimacyBoxes)}</div>` : ""}
+</div>
+
+${monthlyTable ? `
+<div class="page">
+  <div class="head"><h1>월별 담당자 접촉 건수 — ${esc(state.selectedStatMonth || "")}</h1><div class="meta">날짜별 접촉 기록 기준 · ${esc(filterLabel)}</div></div>
+  ${monthlyTable}
+  ${figure("담당별 접촉 건수", img("monthly", 1500, 380), 62)}
+  <div class="foot">${esc(site.name || "")} 접촉현황 · 출력일 ${printedAt}</div>
+</div>` : ""}
+
+</body></html>`;
+}
+
+function printContactReport(site, size) {
+  const html = buildContactReportHtml(site, size);
+  let frame = document.getElementById("ctReportFrame");
+  if (frame) frame.remove();
+  frame = document.createElement("iframe");
+  frame.id = "ctReportFrame";
+  frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
+  document.body.appendChild(frame);
+  const doc = frame.contentWindow.document;
+  doc.open(); doc.write(html); doc.close();
+  const go = () => { try { frame.contentWindow.focus(); frame.contentWindow.print(); } catch (e) { alert("출력 중 문제가 발생했습니다: " + e.message); } };
+  // 이미지가 모두 로드된 뒤 인쇄
+  const imgs = [...doc.images];
+  let left = imgs.length;
+  if (!left) return setTimeout(go, 100);
+  imgs.forEach(im => { if (im.complete) { if (--left === 0) setTimeout(go, 100); } else im.onload = im.onerror = () => { if (--left === 0) setTimeout(go, 100); }; });
+}
+
+/* 인쇄 전에 미리보기로 확인하고 싶을 때: 새 창에 보고서만 띄우기 */
+function previewContactReport(site, size) {
+  const w = window.open("", "_blank");
+  if (!w) { alert("팝업이 차단되었습니다. 브라우저 주소창 오른쪽에서 팝업 허용 후 다시 눌러주세요."); return; }
+  w.document.open(); w.document.write(buildContactReportHtml(site, size).replace("</body>",
+    `<div style="position:fixed;top:10px;right:14px" class="noprint"><button onclick="window.print()" style="font-size:14px;padding:8px 16px;background:#1e3a5f;color:#fff;border:0;border-radius:6px;cursor:pointer">🖨 인쇄</button></div>
+     <style>@media print{.noprint{display:none}} @media screen{body{background:#e2e8f0}.page{background:#fff;width:${size === "A3" ? "420mm" : "297mm"};margin:12px auto;box-shadow:0 2px 8px rgba(0,0,0,.15)}}</style></body>`));
+  w.document.close();
+}
+
 /* ---------- 메인 렌더 ---------- */
 function renderContactTab(site) {
   // 다른 현장에서 만든 그래프가 남아있지 않도록 정리
@@ -322,8 +543,9 @@ function renderContactTab(site) {
   panel.innerHTML = `
     <div class="detail-card" style="display:flex;justify-content:flex-end;align-items:center;gap:6px">
       <span style="margin-right:auto;font-size:11px;color:var(--slate-500)">접촉현황 버전 ${CONTACT_TAB_VERSION}</span>
-      <button id="ctPrintA4" class="btn btn-outline btn-sm">🖨 A4로 인쇄</button>
-      <button id="ctPrintA3" class="btn btn-outline btn-sm">🖨 A3로 인쇄</button>
+      <button id="ctReportPreview" class="btn btn-outline btn-sm">👁 보고서 미리보기</button>
+      <button id="ctPrintA4" class="btn btn-primary btn-sm">📄 보고서 출력 (A4 가로)</button>
+      <button id="ctPrintA3" class="btn btn-outline btn-sm">📄 A3 가로</button>
     </div>
 
     <div class="detail-card">
@@ -1343,8 +1565,9 @@ function rebuildContactCharts(site) {
 
 /* ---------- 버튼 동작 ---------- */
 function bindContactTabEvents(site) {
-  document.getElementById("ctPrintA4")?.addEventListener("click", () => printContactTab("A4"));
-  document.getElementById("ctPrintA3")?.addEventListener("click", () => printContactTab("A3"));
+  document.getElementById("ctPrintA4")?.addEventListener("click", () => printContactReport(site, "A4"));
+  document.getElementById("ctPrintA3")?.addEventListener("click", () => printContactReport(site, "A3"));
+  document.getElementById("ctReportPreview")?.addEventListener("click", () => previewContactReport(site, "A4"));
 
   document.getElementById("ctMasterExcelUpload")?.addEventListener("click", () => {
     document.getElementById("ctMasterExcelFile").click();
