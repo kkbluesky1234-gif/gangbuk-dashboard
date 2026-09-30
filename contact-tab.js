@@ -27,7 +27,7 @@ function leaseRoleOf(v) {
   if (!s || /후보|탈락|낙선|당선|사퇴/.test(s)) return "";
   return LEASE_ROLES.find(r => s.includes(r)) ? s : "";
 }
-const CONTACT_TAB_VERSION = "2026-09-30 v20";
+const CONTACT_TAB_VERSION = "2026-09-30 v22";
 
 /* 모든 막대/선 그래프 위에 숫자 값을 표시하는 공통 플러그인 (도넛 차트는 제외) */
 if (typeof Chart !== "undefined" && !Chart._ctValueLabelsRegistered) {
@@ -129,6 +129,7 @@ function ensureContactData(site) {
     const fixed = cleanStance(c.stance);
     if ((c.stance || "미정") !== fixed) { c.stance = fixed; migrated = true; }
   });
+  if (cleanupPeople(site)) migrated = true;
   // 예전에 "단순", "tm" 등으로 저장돼 통계에서 빠지던 접촉방법을 표준값으로 정리
   site.contacts.forEach(c => {
     if (!c.method) return;
@@ -198,6 +199,65 @@ function normalizeMethod(v) {
   const raw = String(v ?? "").trim();
   if (!raw) return "";
   return parseMethod(raw) || raw;
+}
+
+/* =========================================================
+   사람 정리 (탭을 열 때마다 자동, 모든 담당)
+   ① 직책(조합장·감사·이사·대의원) 없이 "임대의원"으로만 표시된 기록 → 일반 조합원
+   ② 생년월일 없는 예전 기록 → 명부의 같은 이름(한 명뿐일 때)과 합침
+   ③ 같은 사람·같은 날짜 중복 → 하나만
+   ④ 최신 명부에 없는 사람의 기록 → 삭제 ("+ 접촉 기록 추가"로 직접 넣은 기록은 유지)
+   ========================================================= */
+function cleanupPeople(site) {
+  let changed = false;
+  const regDates = registryDates(site);
+  const latest = regDates.length ? (site.registryStats[regDates[regDates.length - 1]] || []) : [];
+  const regHasKeys = latest.length && latest[0][4];
+  const reg = {};                    // key -> {chajang, role, type}
+  if (regHasKeys) latest.forEach(r => { reg[r[4]] = { chajang: r[0], type: r[1] ? "임대의원" : "조합원", role: r[5] || "" }; });
+
+  // 이름 → 생년월일 있는 사람 목록 (명부 우선, 없으면 기록에서)
+  const byName = {};
+  const addName = (key) => { const [n, b] = key.split("|"); if (!b) return; (byName[n] = byName[n] || new Set()).add(key); };
+  if (regHasKeys) Object.keys(reg).forEach(addName); else site.contacts.forEach(c => addName(personKey(c)));
+
+  site.contacts.forEach(c => {
+    if (!c.name) return;
+    // ②
+    if (!c.birthDate && byName[c.name] && byName[c.name].size === 1) {
+      c.birthDate = [...byName[c.name]][0].split("|")[1]; changed = true;
+    }
+    const r = reg[personKey(c)];
+    if (r) {
+      if (c.chajang !== r.chajang || c.type !== r.type || (c.role || "") !== r.role) { c.chajang = r.chajang; c.type = r.type; c.role = r.role; changed = true; }
+    } else if (c.type === "임대의원" && !leaseRoleOf(c.role)) {
+      c.type = "조합원"; changed = true;   // ①
+    }
+  });
+  // ③
+  const keep = new Map();
+  site.contacts.forEach(c => {
+    if (!c.name) return;
+    const k = `${personKey(c)}__${c.date}`;
+    const prev = keep.get(k);
+    if (!prev) { keep.set(k, c); return; }
+    const score = x => (x.source === "import" ? 2 : 0) + (x.method ? 1 : 0);
+    const win = score(c) > score(prev) ? c : prev, lose = win === c ? prev : c;
+    if (!win.method && lose.method) win.method = lose.method;
+    if (!win.note && lose.note) win.note = lose.note;
+    keep.set(k, win);
+  });
+  const before = site.contacts.length;
+  site.contacts = site.contacts.filter(c => !c.name || keep.get(`${personKey(c)}__${c.date}`) === c);
+  // ④
+  if (regHasKeys) site.contacts = site.contacts.filter(c => !c.name || c.ui || reg[personKey(c)]);
+  if (site.contacts.length !== before) changed = true;
+  if (regHasKeys) {
+    const n0 = site.stanceSnapshots.length;
+    site.stanceSnapshots = site.stanceSnapshots.filter(x => reg[personKey(x)]);
+    if (site.stanceSnapshots.length !== n0) changed = true;
+  }
+  return changed;
 }
 
 /* [수정 #12] 동명이인 구분: 이름 + 생년월일(있을 때) */
@@ -424,7 +484,7 @@ function buildPersonListHtml(site, chajang, regDate, weekMonth) {
   const rowsHtml = people.map((p, i) => {
     const wk = weeksByKey[p.key] || {};
     const tot = W.reduce((s, w) => s + (wk[w] || 0), 0);
-    return `<tr><td class="c">${i + 1}</td><td>${nameOf(p.key)}</td><td class="c">${p.type === "임대의원" ? esc(p.role || "임대의원") : ""}</td>
+    return `<tr><td class="c">${i + 1}</td><td>${nameOf(p.key)}</td><td class="c">${p.type === "임대의원" ? esc(p.role || "") : ""}</td>
       <td class="c">${pill(p.cum)}</td><td class="c">${pill(p.week)}</td>
       <td class="c">${esc(p.stance && p.stance !== "미정" ? p.stance : "")}</td><td class="c">${esc(p.level || "")}</td>
       ${W.map(w => `<td class="c">${wk[w] || ""}</td>`).join("")}<td class="c strong">${tot || ""}</td></tr>`;
@@ -734,19 +794,19 @@ function buildLeaseOnePageHtml(site, size) {
   if (!people.length) {
     const m = {};
     site.contacts.filter(c => c.type === "임대의원" && c.name).forEach(c => {
-      m[personKey(c)] = { key: personKey(c), chajang: c.chajang || "(담당 미지정)", role: c.role || "임대의원", cum: c.method || "미접촉", week: "" };
+      m[personKey(c)] = { key: personKey(c), chajang: c.chajang || "(담당 미지정)", role: c.role, cum: c.method || "미접촉", week: "" };
     });
     people = Object.values(m);
   }
   const leaseKeys = new Set(people.map(p => p.key));
-  const cntByKey = {}, wkSets = ranges.map(() => new Set()), wkCnt = ranges.map(() => 0);
+  const cntByKey = {}, wkByKey = {}, wkSets = ranges.map(() => new Set()), wkCnt = ranges.map(() => 0);
   site.contacts.forEach(c => {
     if (!c.name || !isValidDateStr(c.date) || !ranges.length || c.date < ranges[0].start || c.date > ranges[ranges.length - 1].end) return;
     const k = personKey(c);
     if (!leaseKeys.has(k)) return;
     cntByKey[k] = (cntByKey[k] || 0) + 1;
     const w = weekIndexIn(ranges, c.date);
-    if (w) { wkSets[w - 1].add(k); wkCnt[w - 1]++; }
+    if (w) { wkSets[w - 1].add(k); wkCnt[w - 1]++; (wkByKey[k] = wkByKey[k] || {})[w] = (wkByKey[k][w] || 0) + 1; }
   });
 
   const ROLE_ORDER = ["조합장", "부조합장", "감사", "이사", "대의원"];
@@ -782,7 +842,10 @@ function buildLeaseOnePageHtml(site, size) {
   const barRows = names.map(n => {
     const s = stat(by[n]);
     const seg = (k, v) => v ? `<i style="width:${v / maxT * 100}%;background:${C[k]}">${v / maxT >= 0.09 ? v : ""}</i>` : "";
-    return `<div class="br"><div class="bn">${esc(n)}</div><div class="bt">${seg("good", s.good)}${seg("refuse", s.refuse)}${seg("absent", s.absent)}${seg("none", s.none)}</div><div class="bv"><b>${s.good}</b>/${s.total}<small>${pctN(s.good, s.total)}%</small></div></div>`;
+    return `<div class="br"><div class="bn">${esc(n)}</div>
+      <div class="bts"><div class="bt">${seg("good", s.good)}${seg("refuse", s.refuse)}${seg("absent", s.absent)}${seg("none", s.none)}</div>
+        <div class="bt wkb"><i style="width:${s.wk / maxT * 100}%;background:#8fb8e3">${s.wk && s.wk / maxT >= 0.09 ? s.wk : ""}</i></div></div>
+      <div class="bv"><b>${s.good}</b>/${s.total}<small>${pctN(s.good, s.total)}%</small><br><span class="wkv">주차 ${s.wk}</span></div></div>`;
   }).join("");
 
   // ③ 주차별 막대 (임대의원 접촉 인원)
@@ -795,13 +858,24 @@ function buildLeaseOnePageHtml(site, size) {
   const cls = s => ({ "상담": "g", "단순상담": "g", "TM": "g", "거부": "r", "부재": "a", "불명": "a", "미접촉": "n" }[s] || "n");
   const shortM = s => s === "단순상담" ? "단순" : (s || "-");
   const nameOf = k => esc(((k || "").split("|")[0]).split(/\s+/)[0]);
+  const W = ranges.map((_, i) => i + 1);
+  const roleShort = r => ({ "조합장": "조합장", "부조합장": "부조합장", "감사": "감사", "이사": "이사", "대의원": "" }[r] ?? r);
   const cards = names.map(n => {
     const list = by[n].slice().sort((a, b) => roleIdx(a.role) - roleIdx(b.role) || stIdx(a.cum) - stIdx(b.cum) || a.key.localeCompare(b.key));
     const s = stat(list);
+    const wSum = W.map(w => list.reduce((t, p) => t + ((wkByKey[p.key] || {})[w] || 0), 0));
+    const tot = wSum.reduce((a, b) => a + b, 0);
     return `<div class="card"><div class="ch"><b>${esc(n)}</b><span>${s.good}/${s.total}명 접촉</span></div>
-      <table class="lt">${list.map(p => `<tr><td class="nm">${nameOf(p.key)}</td><td class="rl">${esc(p.role)}</td>
-        <td class="st"><span class="dot ${cls(p.cum)}"></span>${esc(shortM(p.cum))}</td>
-        <td class="ct">${cntByKey[p.key] ? `${cntByKey[p.key]}회` : `<span class="z">-</span>`}</td></tr>`).join("")}</table></div>`;
+      <table class="lt">
+        <colgroup><col>${W.map(() => `<col class="cw">`).join("")}<col class="ct2"></colgroup>
+        <thead><tr><th class="nmh">이름 <span>주차→</span></th>${W.map(w => `<th>${w}</th>`).join("")}<th>계</th></tr></thead>
+        <tbody>${list.map(p => {
+          const wk = wkByKey[p.key] || {}, t = cntByKey[p.key] || 0, r = roleShort(p.role);
+          return `<tr><td class="nm"><span class="dot ${cls(p.cum)}"></span>${nameOf(p.key)}${r ? `<span class="rl">${esc(r)}</span>` : ""}${p.cum === "거부" ? `<span class="rf">거부</span>` : ""}</td>
+            ${W.map(w => `<td class="w${wk[w] >= 2 ? " hi" : ""}">${wk[w] || `<span class="z">·</span>`}</td>`).join("")}<td class="ct">${t || `<span class="z">-</span>`}</td></tr>`;
+        }).join("")}</tbody>
+        <tfoot><tr><td class="nm">차장 계</td>${wSum.map(v => `<td class="w">${v || "·"}</td>`).join("")}<td class="ct">${tot}</td></tr></tfoot>
+      </table></div>`;
   }).join("");
 
   const refuse = people.filter(p => p.cum === "거부");
@@ -818,24 +892,30 @@ function buildLeaseOnePageHtml(site, size) {
   .band .ttl { font-size: 16pt; font-weight: 800; color: #1f3b5c; letter-spacing: -0.5px; }
   .band .ttl small { font-size: 9pt; font-weight: 600; color: #6b7280; margin-right: 8px; }
   .band .meta { font-size: 8pt; color: #6b7280; text-align: right; line-height: 1.45; }
-  .main { flex: 1; display: grid; grid-template-columns: 41% 1fr; gap: 12px; min-height: 0; }
-  .left { display: flex; flex-direction: column; gap: 8px; }
+  .main { flex: 1; display: grid; grid-template-columns: 33% 1fr; grid-template-rows: minmax(0, 1fr); gap: 12px; min-height: 0; }
+  .left { display: flex; flex-direction: column; gap: 7px; min-height: 0; overflow: hidden; }
+  .right { overflow: hidden; }
   .box { border: 1px solid #e3e8ef; border-radius: 7px; padding: 7px 11px; }
   .box h3 { margin: 0 0 6px; font-size: 9pt; color: #1f3b5c; display: flex; justify-content: space-between; align-items: baseline; }
   .box h3 small { font-weight: 400; font-size: 7pt; color: #6b7280; }
-  .hero { display: grid; grid-template-columns: 34mm 1fr; gap: 10px; align-items: center; }
-  .hero .d { width: 34mm; height: 34mm; }
+  .hero { display: grid; grid-template-columns: 30mm 1fr; gap: 8px; align-items: center; }
+  .hero .d { width: 30mm; height: 30mm; }
   .kgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 10px; }
   .k .l { font-size: 7.3pt; color: #6b7280; } .k .v { font-size: 14pt; font-weight: 800; color: #1f3b5c; line-height: 1.15; } .k .v span { font-size: 7.5pt; color: #4b5563; margin-left: 1px; }
   .k.r .v { color: #b42318; }
   .legend { display: flex; gap: 10px; font-size: 7pt; color: #4b5563; margin-top: 4px; }
   .legend em { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 3px; vertical-align: -1px; }
-  .br { display: grid; grid-template-columns: 15mm 1fr 19mm; align-items: center; gap: 6px; margin-bottom: 3.2px; }
+  .br { display: grid; grid-template-columns: 13mm 1fr 17mm; align-items: center; gap: 6px; margin-bottom: 3px; }
+  .bts { display: flex; flex-direction: column; gap: 1.5px; }
+  .bt { height: 10px; }
+  .bt.wkb { height: 5px; background: transparent; }
+  .bt.wkb i { font-size: 5.5pt; }
+  .bv .wkv { font-size: 6.4pt; color: #5b8cc4; }
   .bn { font-size: 7.8pt; font-weight: 700; color: #111827; white-space: nowrap; }
   .bt { display: flex; height: 11px; background: #f5f7fa; border-radius: 3px; overflow: hidden; }
   .bt i { display: flex; align-items: center; justify-content: center; color: #fff; font-style: normal; font-size: 6.6pt; font-weight: 700; }
   .bv { font-size: 7.4pt; color: #374151; white-space: nowrap; } .bv b { color: #1f3b5c; } .bv small { color: #6b7280; margin-left: 4px; font-size: 6.8pt; }
-  .wk { display: flex; gap: 8px; height: 25mm; align-items: flex-end; padding-top: 10px; }
+  .wk { display: flex; gap: 8px; height: 22mm; align-items: flex-end; padding-top: 10px; }
   .wc { flex: 1; display: flex; flex-direction: column; height: 100%; }
   .wbar { flex: 1; display: flex; align-items: flex-end; justify-content: center; border-bottom: 1px solid #cfd8e3; }
   .wbar i { position: relative; width: 62%; background: #2f6fb5; border-radius: 3px 3px 0 0; min-height: 1px; }
@@ -845,15 +925,26 @@ function buildLeaseOnePageHtml(site, size) {
   .right { display: flex; flex-direction: column; min-height: 0; }
   .right h3 { margin: 0 0 5px; font-size: 9pt; color: #1f3b5c; display: flex; justify-content: space-between; align-items: baseline; }
   .right h3 small { font-weight: 400; font-size: 7pt; color: #6b7280; }
-  .cards { column-count: 3; column-gap: 7px; flex: 1; }
+  .cards { column-count: 3; column-gap: 7px; flex: 1; min-height: 0; overflow: hidden; font-size: 7.4pt; }
+  .main, .right { min-height: 0; }
   .card { break-inside: avoid; border: 1px solid #e3e8ef; border-radius: 6px; margin-bottom: 6px; overflow: hidden; }
   .card .ch { display: flex; justify-content: space-between; align-items: baseline; padding: 3px 8px; background: #f3f6fa; border-bottom: 1px solid #e3e8ef; }
-  .card .ch b { font-size: 8.3pt; color: #1f3b5c; } .card .ch span { font-size: 6.8pt; color: #6b7280; }
-  .lt { width: 100%; border-collapse: collapse; font-size: 7.4pt; }
-  .lt td { padding: 0.7px 6px; border-bottom: 1px solid #f2f4f7; white-space: nowrap; }
-  .lt tr:last-child td { border-bottom: 0; }
-  .lt .nm { font-weight: 600; color: #111827; } .lt .rl { color: #9ca3af; font-size: 6.7pt; }
-  .lt .st { font-size: 7pt; color: #374151; } .lt .ct { text-align: right; font-weight: 700; color: #1f3b5c; font-size: 7pt; } .lt .z { color: #d1d5db; font-weight: 400; }
+  .card .ch b { font-size: 1.12em; color: #1f3b5c; } .card .ch span { font-size: 0.92em; color: #6b7280; }
+  .lt { width: 100%; border-collapse: collapse; font-size: inherit; table-layout: fixed; }
+  .lt col.cw { width: 1.75em; } .lt col.ct2 { width: 2.1em; }
+  .lt td.nm { overflow: hidden; text-overflow: ellipsis; }
+  .lt thead th.nmh span { font-weight: 400; color: #9ca3af; margin-left: 4px; }
+  .lt td { padding: 0.7px 3px; border-bottom: 1px solid #f2f4f7; white-space: nowrap; }
+  .lt td:first-child { padding-left: 6px; }
+  .lt thead th { font-size: 0.82em; font-weight: 600; color: #6b7280; padding: 1.5px 2px; border-bottom: 1px solid #e3e8ef; text-align: center; }
+  .lt thead th.nmh { text-align: left; padding-left: 6px; }
+  .lt td.w { text-align: center; width: 1.9em; color: #1f3b5c; }
+  .lt td.w.hi { font-weight: 800; background: #e8f0fa; }
+  .lt tfoot td { border-top: 1px solid #cfd8e3; border-bottom: 0; background: #f7f9fc; font-weight: 700; color: #1f3b5c; font-size: 0.92em; }
+  .lt .rf { margin-left: 3px; font-size: 0.8em; color: #b42318; font-weight: 700; }
+  .lt tbody tr:last-child td { border-bottom: 0; }
+  .lt .nm { font-weight: 600; color: #111827; } .lt .rl { color: #9ca3af; font-size: 0.82em; margin-left: 3px; font-weight: 400; }
+  .lt .st { font-size: 0.95em; color: #374151; } .lt .ct { text-align: right; font-weight: 700; color: #1f3b5c; font-size: 0.95em; } .lt .z { color: #d1d5db; font-weight: 400; }
   .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; vertical-align: 1px; }
   .dot.g { background: #2f6fb5; } .dot.r { background: #d9534f; } .dot.a { background: #f0ad4e; } .dot.n { background: #cbd5e1; }
   .foot { display: flex; justify-content: space-between; font-size: 6.8pt; color: #9ca3af; margin-top: 3px; }
@@ -874,10 +965,10 @@ function buildLeaseOnePageHtml(site, size) {
             <div class="k r"><div class="l">거부</div><div class="v">${all.refuse}<span>명</span></div></div>
           </div>
         </div>
-        <div class="legend"><span><em style="background:${C.good}"></em>접촉 ${all.good}</span><span><em style="background:${C.refuse}"></em>거부 ${all.refuse}</span><span><em style="background:${C.absent}"></em>부재·불명 ${all.absent}</span><span><em style="background:${C.none}"></em>미접촉 ${all.none}</span></div>
+        <div class="legend"><span><em style="background:#8fb8e3"></em>주차 접촉 ${all.wk}</span><span><em style="background:${C.good}"></em>접촉 ${all.good}</span><span><em style="background:${C.refuse}"></em>거부 ${all.refuse}</span><span><em style="background:${C.absent}"></em>부재·불명 ${all.absent}</span><span><em style="background:${C.none}"></em>미접촉 ${all.none}</span></div>
       </div>
       <div class="box">
-        <h3>담당별 접촉 현황 <small>막대 길이 = 임대의원 수</small></h3>
+        <h3>담당별 접촉 현황 <small>막대 길이 = 인원 수 · 윗줄 누계 / 아랫줄 주차 접촉</small></h3>
         ${barRows}
       </div>
       <div class="box">
@@ -895,12 +986,29 @@ function buildLeaseOnePageHtml(site, size) {
       </div>
     </div>
     <div class="right">
-      <h3>차장별 임대의원 명단 <small><span class="dot g"></span>접촉 <span class="dot r"></span>거부 <span class="dot a"></span>부재·불명 <span class="dot n"></span>미접촉 · 오른쪽 = ${monthNo}월 접촉 횟수</small></h3>
+      <h3>차장별 임대의원 · 주차별 만난 횟수 (${monthNo}월) <small><span class="dot g"></span>접촉 <span class="dot r"></span>거부 <span class="dot a"></span>부재·불명 <span class="dot n"></span>미접촉 · 진한 칸 = 한 주에 2회 이상</small></h3>
       <div class="cards">${cards || `<p>임대의원 명단이 없습니다. 명부를 다시 업로드해주세요.</p>`}</div>
     </div>
   </div>
   <div class="foot"><span>${esc(site.name || "")} · 임대의원 접촉현황</span><span>출력 ${printedAt}</span></div>
 </div>
+<script>
+/* 명단이 한 장에 다 들어가도록 글자 크기·열 수 자동 조절 */
+(function () {
+  // 왼쪽(그래프): 넘치면 전체를 조금씩 축소
+  var L = document.querySelector(".left");
+  if (L) { var z = 1; while (L.scrollHeight > L.clientHeight + 1 && z > 0.72) { z -= 0.03; L.style.zoom = z; } }
+  var c = document.querySelector(".cards"); if (!c) return;
+  var fs = 7.4, cols = 3, g = 0;
+  function over() { return c.scrollWidth > c.clientWidth + 1 || c.scrollHeight > c.clientHeight + 1; }
+  while (over() && g++ < 40) {
+    if (cols === 3 && fs <= 6.0) { cols = 4; c.style.columnCount = 4; fs = 6.8; }
+    else fs = Math.round((fs - 0.2) * 10) / 10;
+    c.style.fontSize = fs + "pt";
+    if (fs < 5.6) break;
+  }
+})();
+</script>
 </body></html>`;
 }
 
@@ -2072,7 +2180,7 @@ function bindContactTabEvents(site) {
     const preset = state.selectedChajang.size === 1 ? [...state.selectedChajang][0] : "";
     site.contacts.push({
       id: uid(), date: todayStr(), chajang: preset, name: "", role: "", method: "",
-      type: "조합원", stance: "미정", level: "하", source: "manual"
+      type: "조합원", stance: "미정", level: "하", source: "manual", ui: true
     });
     persist();
     refreshContactViews(site);
