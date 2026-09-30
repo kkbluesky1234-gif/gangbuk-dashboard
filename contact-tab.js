@@ -19,8 +19,15 @@ const CONTACT_METHODS = ["", "상담", "단순상담", "TM", "거부", "부재",
 const DEFAULT_EVENT_TYPES = ["투어", "간담회", "설문조사"];
 const EVENT_COLORS = ["#378add", "#d85a30", "#1d9e75", "#8b5cf6", "#f59e0b"];
 const PERIOD_MODES = [["day", "일별"], ["week", "주별"], ["month", "월별"]];
-const REGISTRY_PARSER_VERSION = 3;
-const CONTACT_TAB_VERSION = "2026-09-30 v8";
+const REGISTRY_PARSER_VERSION = 4;
+/* 임대의원으로 인정하는 직책 값. "당선/탈락/후보/번호" 같은 후보 관련 값은 임대의원이 아님 */
+const LEASE_ROLES = ["부조합장", "조합장", "감사", "이사", "대의원", "총무"];
+function leaseRoleOf(v) {
+  const s = String(v ?? "").replace(/\s/g, "");
+  if (!s || /후보|탈락|낙선|당선|사퇴/.test(s)) return "";
+  return LEASE_ROLES.find(r => s.includes(r)) ? s : "";
+}
+const CONTACT_TAB_VERSION = "2026-09-30 v9";
 
 /* 모든 막대/선 그래프 위에 숫자 값을 표시하는 공통 플러그인 (도넛 차트는 제외) */
 if (typeof Chart !== "undefined" && !Chart._ctValueLabelsRegistered) {
@@ -1648,7 +1655,21 @@ function importMasterRegistryExcel(site, binary) {
   const noCol = findColExact(headerRows, "No");
   const unionCheckCol = noCol >= 0 ? noCol + 1 : -1;
   const deptCol = findColExact(headerRows, "담당");
-  const roleCol = findColByHeader(headerRows, v => v.includes("임대의원"));
+  // [수정] 임대의원 열: "임대의원" 머리글 후보 열들 중에서 실제로 직책 값(대의원·이사·감사·조합장)이
+  // 가장 많이 들어있는 열을 고름. "후보", "후보번호", "전직책" 열은 제외.
+  const roleCol = (() => {
+    const maxCols = Math.max(0, ...headerRows.map(r => (r ? r.length : 0)));
+    let best = -1, bestCnt = -1;
+    for (let c = 0; c < maxCols; c++) {
+      const heads = headerRows.map(r => cleanHeader(r && r[c]));
+      if (!heads.some(h => h.includes("임대의원") || h === "직책" || h === "직책등")) continue;
+      if (heads.some(h => h.includes("후보") || h.includes("전직책"))) continue;
+      let cnt = 0;
+      for (let r = 4; r < rows.length; r++) if (rows[r] && leaseRoleOf(rows[r][c])) cnt++;
+      if (cnt > bestCnt) { best = c; bestCnt = cnt; }
+    }
+    return best >= 0 ? best : findColByHeader(headerRows, v => v.includes("임대의원"));
+  })();
   const stanceStart = findColExact(headerRows, "시공사성향");
   const intimacyStart = findColExact(headerRows, "친밀도");
   const surveyStart = findColExact(headerRows, "설문조사");
@@ -1718,7 +1739,7 @@ function importMasterRegistryExcel(site, binary) {
   let didReset = false;
   const hasOldImport = site.contacts.some(c => c.source === "import") || site.stanceSnapshots.length;
   if (hasOldImport && site.registryParserVersion !== REGISTRY_PARSER_VERSION) {
-    if (confirm("명부 읽는 방식이 새로 바뀌었습니다.\n\n예전에 올린 명부 데이터는 포스코(P)·친밀도 '상'이 빠지는 등 잘못 읽힌 값이 섞여 있습니다.\n\n확인: 예전 명부 업로드분을 지우고 이 파일로 새로 채우기 (권장, 직접 입력한 기록은 유지)\n취소: 지우지 않고 추가만 하기")) {
+    if (confirm("명부 읽는 방식이 새로 바뀌었습니다.\n\n예전에 올린 명부 데이터에는 후보(당선/탈락)를 임대의원으로 잘못 읽는 등 틀린 값이 섞여 있습니다.\n\n확인: 예전 명부 업로드분을 지우고 이 파일로 새로 채우기 (권장, 직접 입력한 기록은 유지)\n취소: 지우지 않고 추가만 하기")) {
       var resetBackup = { contacts: JSON.parse(JSON.stringify(site.contacts)), snaps: JSON.parse(JSON.stringify(site.stanceSnapshots)) };
       site.contacts = site.contacts.filter(c => c.source !== "import");
       site.stanceSnapshots = site.stanceSnapshots.filter(x => x.origin === "weekly");
@@ -1750,7 +1771,7 @@ function importMasterRegistryExcel(site, binary) {
 
     const dept = String(row[deptCol] ?? "").trim();
     const birthDate = birthCol >= 0 ? normBirth(row[birthCol]) : "";
-    const role = String(row[roleCol] ?? "").trim();
+    const role = leaseRoleOf(row[roleCol]);           // 직책 값만 인정 (당선/탈락 등은 무시)
     const type = role ? "임대의원" : "조합원";
 
     let stance = "미정";
