@@ -27,7 +27,7 @@ function leaseRoleOf(v) {
   if (!s || /후보|탈락|낙선|당선|사퇴/.test(s)) return "";
   return LEASE_ROLES.find(r => s.includes(r)) ? s : "";
 }
-const CONTACT_TAB_VERSION = "2026-09-30 v25";
+const CONTACT_TAB_VERSION = "2026-09-30 v26";
 
 /* 모든 막대/선 그래프 위에 숫자 값을 표시하는 공통 플러그인 (도넛 차트는 제외) */
 if (typeof Chart !== "undefined" && !Chart._ctValueLabelsRegistered) {
@@ -324,6 +324,7 @@ function destroyContactCharts(siteId) {
 
 /* [수정 #3, #13] 데이터가 바뀌면 탭 안의 모든 표·그래프를 한 번에 다시 그림 */
 function refreshContactViews(site, opts = {}) {
+  renderStaleWarn(site);
   renderChajangPills(site);
   if (opts.table !== false) renderContactTable(site);
   if (opts.companies) renderCompanyTags(site);
@@ -790,6 +791,7 @@ function buildLeaseOnePageHtml(site, size) {
   // 임대의원 명단 (명부 기준)
   let people = regDates.length ? registryRows(site, regDate, true).filter(x => x.type === "임대의원")
     .map(x => ({ key: x.key, chajang: x.chajang || "(담당 미지정)", role: x.role || "임대의원", cum: x.cumMethod, week: x.weekMethod })) : [];
+  const staleRegistry = !regDates.length || (people.length && !people[0].key);
   if (people.length && !people[0].key) people = [];
   if (!people.length) {
     const m = {};
@@ -815,12 +817,15 @@ function buildLeaseOnePageHtml(site, size) {
   const by = {};
   people.forEach(p => (by[p.chajang] = by[p.chajang] || []).push(p));
   const names = Object.keys(by).sort((a, b) => (a === "미배정") - (b === "미배정") || a.localeCompare(b));
+  // 접촉 = 이 달 주차별 기록에서 실제로 만난 사람 (명부 누계 상태가 아니라)
   const stat = list => {
-    const o = { total: list.length, good: 0, wk: 0, refuse: 0, absent: 0, none: 0, met: 0 };
+    const o = { total: list.length, good: 0, wk: 0, refuse: 0, absent: 0, none: 0, met: 0, ba: 0 };
     list.forEach(p => {
-      if (GOOD.includes(p.cum)) o.good++; else if (p.cum === "거부") o.refuse++; else if (p.cum === "부재" || p.cum === "불명") o.absent++; else o.none++;
+      const met = !!cntByKey[p.key];
+      if (met) o.good++; else if (p.cum === "거부") o.refuse++; else if (p.cum === "부재" || p.cum === "불명") o.absent++; else o.none++;
+      if (GOOD.includes(p.cum)) o.ba++;
       if (GOOD.includes(p.week)) o.wk++;
-      if (cntByKey[p.key]) o.met++;
+      if (met) o.met++;
     });
     return o;
   };
@@ -835,7 +840,7 @@ function buildLeaseOnePageHtml(site, size) {
     <circle cx="55" cy="55" r="${R}" fill="none" stroke="#eef2f7" stroke-width="14"/>
     ${segs.map(([k, v]) => { const len = v / (all.total || 1) * CIRC; const el = `<circle cx="55" cy="55" r="${R}" fill="none" stroke="${C[k]}" stroke-width="14" stroke-dasharray="${len} ${CIRC - len}" stroke-dashoffset="${-off}" transform="rotate(-90 55 55)"/>`; off += len; return el; }).join("")}
     <text x="55" y="53" text-anchor="middle" font-size="17" font-weight="800" fill="#1f3b5c">${pctN(all.good, all.total)}%</text>
-    <text x="55" y="67" text-anchor="middle" font-size="7.5" fill="#6b7280">누계 접촉률</text></svg>`;
+    <text x="55" y="67" text-anchor="middle" font-size="7.5" fill="#6b7280">${monthNo}월 만난 비율</text></svg>`;
 
   // ② 담당별 구성 막대 (인원 기준, 길이 = 인원 수)
   const maxT = Math.max(1, ...names.map(n => by[n].length));
@@ -856,6 +861,7 @@ function buildLeaseOnePageHtml(site, size) {
 
   // ④ 명단 카드
   const cls = s => ({ "상담": "g", "단순상담": "g", "TM": "g", "거부": "r", "부재": "a", "불명": "a", "미접촉": "n" }[s] || "n");
+  const dotOf = p => cntByKey[p.key] ? "g" : (p.cum === "거부" ? "r" : (p.cum === "부재" || p.cum === "불명") ? "a" : "n");
   const shortM = s => s === "단순상담" ? "단순" : (s || "-");
   const nameOf = k => esc(((k || "").split("|")[0]).split(/\s+/)[0]);
   const W = ranges.map((_, i) => i + 1);
@@ -865,13 +871,13 @@ function buildLeaseOnePageHtml(site, size) {
     const s = stat(list);
     const wSum = W.map(w => list.reduce((t, p) => t + ((wkByKey[p.key] || {})[w] || 0), 0));
     const tot = wSum.reduce((a, b) => a + b, 0);
-    return `<div class="card"><div class="ch"><b>${esc(n)}</b><span>${s.good}/${s.total}명 접촉</span></div>
+    return `<div class="card"><div class="ch"><b>${esc(n)}</b><span>${s.good}/${s.total}명 만남</span></div>
       <table class="lt">
         <colgroup><col>${W.map(() => `<col class="cw">`).join("")}<col class="ct2"></colgroup>
         <thead><tr><th class="nmh">이름 <span>주차→</span></th>${W.map(w => `<th>${w}</th>`).join("")}<th>계</th></tr></thead>
         <tbody>${list.map(p => {
           const wk = wkByKey[p.key] || {}, t = cntByKey[p.key] || 0, r = roleShort(p.role);
-          return `<tr><td class="nm"><span class="dot ${cls(p.cum)}"></span>${nameOf(p.key)}${r ? `<span class="rl">${esc(r)}</span>` : ""}${p.cum === "거부" ? `<span class="rf">거부</span>` : ""}</td>
+          return `<tr><td class="nm"><span class="dot ${dotOf(p)}"></span>${nameOf(p.key)}${r ? `<span class="rl">${esc(r)}</span>` : ""}${p.cum === "거부" ? `<span class="rf">거부</span>` : ""}</td>
             ${W.map(w => `<td class="w${wk[w] >= 2 ? " hi" : ""}">${wk[w] || `<span class="z">·</span>`}</td>`).join("")}<td class="ct">${t || `<span class="z">-</span>`}</td></tr>`;
         }).join("")}</tbody>
         <tfoot><tr><td class="nm">차장 계</td>${wSum.map(v => `<td class="w">${v || "·"}</td>`).join("")}<td class="ct">${tot}</td></tr></tfoot>
@@ -956,7 +962,7 @@ function buildLeaseOnePageHtml(site, size) {
 <div class="page">
   <div class="band">
     <div class="ttl"><small>${esc(site.name || "현장")}</small>임대의원 접촉현황</div>
-    <div class="meta">기준일 ${esc(regDate || printedAt)} · 조합장·감사·이사·대의원<br>접촉 횟수 = ${monthNo}월 기준</div>
+    <div class="meta">기준일 ${esc(regDate || printedAt)} · 조합장·감사·이사·대의원<br>${staleRegistry ? `<b style="color:#b42318">⚠ 명부를 다시 업로드해야 정확한 명단이 나옵니다</b>` : `만남 = ${monthNo}월 주차별 기록 기준`}</div>
   </div>
   <div class="main">
     <div class="left">
@@ -964,15 +970,15 @@ function buildLeaseOnePageHtml(site, size) {
         <div class="hero"><div class="d">${donut}</div>
           <div class="kgrid">
             <div class="k"><div class="l">임대의원</div><div class="v">${all.total}<span>명</span></div></div>
-            <div class="k"><div class="l">누계 접촉</div><div class="v">${all.good}<span>명</span></div></div>
             <div class="k"><div class="l">${monthNo}월에 만난 인원</div><div class="v">${all.met}<span>명</span></div></div>
+            <div class="k"><div class="l">명부 누계 접촉</div><div class="v">${all.ba}<span>명</span></div></div>
             <div class="k r"><div class="l">거부</div><div class="v">${all.refuse}<span>명</span></div></div>
           </div>
         </div>
-        <div class="legend"><span><em style="background:#8fb8e3"></em>주차 접촉 ${all.wk}</span><span><em style="background:${C.good}"></em>접촉 ${all.good}</span><span><em style="background:${C.refuse}"></em>거부 ${all.refuse}</span><span><em style="background:${C.absent}"></em>부재·불명 ${all.absent}</span><span><em style="background:${C.none}"></em>미접촉 ${all.none}</span></div>
+        <div class="legend"><span><em style="background:${C.good}"></em>만남 ${all.good}</span><span><em style="background:${C.refuse}"></em>거부 ${all.refuse}</span><span><em style="background:${C.absent}"></em>부재·불명 ${all.absent}</span><span><em style="background:${C.none}"></em>못 만남 ${all.none}</span><span><em style="background:#8fb8e3"></em>주차 접촉 ${all.wk}</span></div>
       </div>
       <div class="box grow" style="flex-grow:2">
-        <h3>담당별 접촉 현황 <small>막대 길이 = 인원 수 · 윗줄 누계 / 아랫줄 주차 접촉</small></h3>
+        <h3>담당별 ${monthNo}월 만남 현황 <small>막대 길이 = 인원 · 윗줄 만남 / 아랫줄 주차 접촉</small></h3>
         <div class="fill">${barRows}</div>
       </div>
       <div class="box grow">
@@ -982,15 +988,16 @@ function buildLeaseOnePageHtml(site, size) {
       <div class="box">
         <h3>주요 사항</h3>
         <ul class="notes">
-          <li>임대의원 <b>${all.total}명</b> 중 <b>${all.good}명 접촉 (${pctN(all.good, all.total)}%)</b>, 주차 접촉 ${all.wk}명</li>
+          <li>임대의원 <b>${all.total}명</b> 중 ${monthNo}월에 <b>${all.good}명 만남 (${pctN(all.good, all.total)}%)</b> · 총 ${Object.values(cntByKey).reduce((a, b) => a + b, 0)}회</li>
+          ${all.none ? `<li>${monthNo}월에 한 번도 못 만난 임대의원 <b>${all.none + all.absent}명</b>${people.filter(p => !cntByKey[p.key] && p.cum !== "거부").length <= 6 ? ` — ${people.filter(p => !cntByKey[p.key] && p.cum !== "거부").map(p => `${nameOf(p.key)}(${esc(p.chajang)})`).join(", ")}` : ""}</li>` : ""}
           ${refuse.length ? `<li><span class="r">거부 ${refuse.length}명</span> — ${refuse.map(p => `${nameOf(p.key)}(${esc(p.chajang)})`).join(", ")}</li>` : ""}
-          ${lo ? `<li>접촉률이 가장 낮은 담당: <b>${esc(lo.n)} ${pctN(lo.s.good, lo.s.total)}%</b> (${lo.s.good}/${lo.s.total}명)</li>` : ""}
+          ${lo ? `<li>만난 비율이 가장 낮은 담당: <b>${esc(lo.n)} ${pctN(lo.s.good, lo.s.total)}%</b> (${lo.s.good}/${lo.s.total}명)</li>` : ""}
           ${busiest.v > 0 ? `<li>${monthNo}월 가장 많이 만난 주: <b>${busiest.i + 1}주 ${busiest.v}명</b></li>` : ""}
         </ul>
       </div>
     </div>
     <div class="right">
-      <h3>차장별 임대의원 · 주차별 만난 횟수 (${monthNo}월) <small><span class="dot g"></span>접촉 <span class="dot r"></span>거부 <span class="dot a"></span>부재·불명 <span class="dot n"></span>미접촉 · 진한 칸 = 한 주에 2회 이상</small></h3>
+      <h3>차장별 임대의원 · 주차별 만난 횟수 (${monthNo}월) <small><span class="dot g"></span>${monthNo}월 만남 <span class="dot r"></span>거부 <span class="dot a"></span>부재·불명 <span class="dot n"></span>못 만남 · 진한 칸 = 한 주에 2회 이상</small></h3>
       <div class="cards">${cards || `<p>임대의원 명단이 없습니다. 명부를 다시 업로드해주세요.</p>`}</div>
     </div>
   </div>
@@ -1362,6 +1369,10 @@ function renderContactTab(site) {
       </div>
     </div>
 
+    <div id="ctStaleWarn" class="detail-card hidden" style="background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;font-size:13px">
+      ⚠ 저장된 명부가 <b>예전 방식</b>이라 이름·직책 정보가 없습니다. 그래서 접촉 기록이 없는 사람(예: 아직 못 만난 대의원)이 명단에서 빠지고, 예전 기록이 대신 보일 수 있습니다.<br>
+      아래 <b>「📁 전체 명부 엑셀 업로드」</b>로 최신 명부를 한 번 다시 올려주세요.
+    </div>
     <div class="detail-card">
       <div class="detail-card-head">
         <h4>📁 전체 명부 엑셀 업로드 (통합 — 추천)</h4>
@@ -1539,6 +1550,7 @@ function renderContactTab(site) {
   renderContactTable(site);
   renderEventTable(site);
   renderTargetPills(site);
+  renderStaleWarn(site);
   renderRegistryStatusSection(site);
   renderMonthlyStatSection(site);
   renderWeeklyPersonSection(site);
@@ -1803,6 +1815,13 @@ function registryRows(site, date, ignoreFilter) {
       (!state.targetType || (state.targetType === "임대의원" ? x.type === "임대의원" : x.type !== "임대의원"))));
 }
 
+function renderStaleWarn(site) {
+  const el = document.getElementById("ctStaleWarn"); if (!el) return;
+  const d = registryDates(site);
+  const rows = d.length ? (site.registryStats[d[d.length - 1]] || []) : [];
+  const stale = site.contacts.length > 0 && (!rows.length || !rows[0][4]);
+  el.classList.toggle("hidden", !stale);
+}
 function renderRegistryStatusSection(site) {
   const sel = document.getElementById("ctRegDateSelect");
   if (!sel) return;
