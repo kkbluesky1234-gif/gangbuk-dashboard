@@ -20,7 +20,7 @@ const DEFAULT_EVENT_TYPES = ["투어", "간담회", "설문조사"];
 const EVENT_COLORS = ["#378add", "#d85a30", "#1d9e75", "#8b5cf6", "#f59e0b"];
 const PERIOD_MODES = [["day", "일별"], ["week", "주별"], ["month", "월별"]];
 const REGISTRY_PARSER_VERSION = 3;
-const CONTACT_TAB_VERSION = "2026-09-30 v6";
+const CONTACT_TAB_VERSION = "2026-09-30 v7";
 
 /* 모든 막대/선 그래프 위에 숫자 값을 표시하는 공통 플러그인 (도넛 차트는 제외) */
 if (typeof Chart !== "undefined" && !Chart._ctValueLabelsRegistered) {
@@ -777,10 +777,11 @@ function renderRegistryStatusSection(site) {
     type: "bar",
     data: {
       labels: list.map(g => g.chajang),
-      datasets: REG_STATUS.map(k => ({ label: k, data: list.map(g => g[k] || 0), backgroundColor: REG_COLORS[k], borderRadius: 2 }))
+      // 방법별로 막대를 나란히 표시 (쌓지 않음) + 막대 위에 숫자
+      datasets: REG_STATUS.map(k => ({ label: k, data: list.map(g => g[k] || 0), backgroundColor: REG_COLORS[k], borderRadius: 4 }))
     },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { ctValueLabels: false },
-      scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } } } }
+    options: { responsive: true, maintainAspectRatio: false,
+      scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
   });
 }
 
