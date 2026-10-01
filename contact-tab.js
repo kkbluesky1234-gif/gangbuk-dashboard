@@ -27,7 +27,7 @@ function leaseRoleOf(v) {
   if (!s || /후보|탈락|낙선|당선|사퇴/.test(s)) return "";
   return LEASE_ROLES.find(r => s.includes(r)) ? s : "";
 }
-const CONTACT_TAB_VERSION = "2026-09-30 v26";
+const CONTACT_TAB_VERSION = "2026-10-01 v27";
 
 /* 모든 막대/선 그래프 위에 숫자 값을 표시하는 공통 플러그인 (도넛 차트는 제외) */
 if (typeof Chart !== "undefined" && !Chart._ctValueLabelsRegistered) {
@@ -214,7 +214,8 @@ function cleanupPeople(site) {
   const latest = regDates.length ? (site.registryStats[regDates[regDates.length - 1]] || []) : [];
   const regHasKeys = latest.length && latest[0][4];
   const reg = {};                    // key -> {chajang, role, type}
-  if (regHasKeys) latest.forEach(r => { reg[r[4]] = { chajang: r[0], type: r[1] ? "임대의원" : "조합원", role: r[5] || "" }; });
+  // 같은 사람이 여러 행(필지)에 있으면 직책이 있는 행을 우선
+  if (regHasKeys) latest.forEach(r => { if (reg[r[4]] && reg[r[4]].role && !r[5]) return; reg[r[4]] = { chajang: r[0], type: r[1] ? "임대의원" : "조합원", role: r[5] || "" }; });
 
   // 이름 → 생년월일 있는 사람 목록 (명부 우선, 없으면 기록에서)
   const byName = {};
@@ -455,8 +456,9 @@ function cloneTableHtml(el) {
 /* 차장 한 명 출력용: 그 차장이 맡은 조합원 명단 (명부 기준 + 이 달 주차별 접촉) */
 function buildPersonListHtml(site, chajang, regDate, weekMonth) {
   const tt = contactStateFor(site.id).targetType;
-  const regs = registryRows(site, regDate, true).filter(x => (x.chajang || "(담당 미지정)") === chajang &&
-    (!tt || (tt === "임대의원" ? x.type === "임대의원" : x.type !== "임대의원")));
+  const regs = registryPeople(site, regDate, true).filter(x => x.chajang === chajang &&
+    (!tt || (tt === "임대의원" ? x.type === "임대의원" : x.type !== "임대의원")))
+    .map(x => ({ ...x, cumMethod: x.cum, weekMethod: x.week }));
   const ranges = weekRangesOfMonth(weekMonth);
   const W = ranges.map((_, i) => i + 1);
   const weeksByKey = {};
@@ -788,14 +790,13 @@ function buildLeaseOnePageHtml(site, size) {
   const ranges = weekRangesOfMonth(month);
   const monthNo = Number(month.slice(5, 7)) || "";
 
-  // 임대의원 명단 (명부 기준)
-  let people = regDates.length ? registryRows(site, regDate, true).filter(x => x.type === "임대의원")
-    .map(x => ({ key: x.key, chajang: x.chajang || "(담당 미지정)", role: x.role || "임대의원", cum: x.cumMethod, week: x.weekMethod })) : [];
-  const staleRegistry = !regDates.length || (people.length && !people[0].key);
-  if (people.length && !people[0].key) people = [];
+  // 임대의원 명단 (명부 기준 — 예전 방식 저장이면 사람별 기록으로 대신)
+  const rowsRaw = regDates.length ? registryRows(site, regDate, true) : [];
+  const staleRegistry = !regDates.length || (rowsRaw.length && !rowsRaw[0].key);
+  let people = registryPeople(site, regDate, true).filter(x => x.type === "임대의원");
   if (!people.length) {
     const m = {};
-    site.contacts.filter(c => c.type === "임대의원" && c.name).forEach(c => {
+    site.contacts.filter(c => c.type === "임대의원" && c.name && leaseRoleOf(c.role)).forEach(c => {
       m[personKey(c)] = { key: personKey(c), chajang: c.chajang || "(담당 미지정)", role: c.role, cum: c.method || "미접촉", week: "" };
     });
     people = Object.values(m);
@@ -962,7 +963,7 @@ function buildLeaseOnePageHtml(site, size) {
 <div class="page">
   <div class="band">
     <div class="ttl"><small>${esc(site.name || "현장")}</small>임대의원 접촉현황</div>
-    <div class="meta">기준일 ${esc(regDate || printedAt)} · 조합장·감사·이사·대의원<br>${staleRegistry ? `<b style="color:#b42318">⚠ 명부를 다시 업로드해야 정확한 명단이 나옵니다</b>` : `만남 = ${monthNo}월 주차별 기록 기준`}</div>
+    <div class="meta">기준일 ${esc(regDate || printedAt)} · 조합장·감사·이사·대의원<br>${staleRegistry ? `<b style="color:#b45309">명부 재업로드 시 누계·주차 상태까지 정확히 반영됩니다</b>` : `만남 = ${monthNo}월 주차별 기록 기준`}</div>
   </div>
   <div class="main">
     <div class="left">
@@ -1055,8 +1056,7 @@ function buildOnePageReportHtml(site, size) {
   const monthNo = Number(month.slice(5, 7)) || "";
 
   // 명부 기준 사람 목록 (대상/담당 필터 반영)
-  const rows = regDates.length ? registryRows(site, regDate) : [];
-  const people = rows.map(x => ({ key: x.key || "", chajang: x.chajang || "(담당 미지정)", type: x.type, role: x.role || "", cum: x.cumMethod, week: x.weekMethod }));
+  const people = regDates.length ? registryPeople(site, regDate) : [];
   const keys = new Set(people.map(p => p.key));
 
   // 이 달 주차별 접촉 (기록 기준)
@@ -1813,6 +1813,30 @@ function registryRows(site, date, ignoreFilter) {
       key: r[4] || "", role: r[5] || "", stance: r[6] || "", level: r[7] || "" }))
     .filter(x => ignoreFilter || ((!state.selectedChajang.size || state.selectedChajang.has(x.chajang)) &&
       (!state.targetType || (state.targetType === "임대의원" ? x.type === "임대의원" : x.type !== "임대의원"))));
+}
+
+/* 명부 기준 사람 목록.
+   명부현황이 예전 방식(이름 없음)으로 저장돼 있으면, 명부 업로드 때 함께 저장한
+   사람별 기록(성향·친밀도 스냅샷: 이름·생년월일·담당·직책 포함)으로 대신 만듦 */
+function registryPeople(site, regDate, ignoreFilter) {
+  const rows = registryRows(site, regDate, ignoreFilter);
+  if (rows.length && rows[0].key) return rows.map(x => ({ key: x.key, chajang: x.chajang || "(담당 미지정)", type: x.type, role: x.role || "", cum: x.cumMethod, week: x.weekMethod }));
+  const snaps = (site.stanceSnapshots || []).filter(x => x.name);
+  // 가장 최근 명부 업로드(기준일)에 들어 있던 사람만
+  const inLatest = snaps.filter(x => x.date === regDate || x.confirmedUntil === regDate);
+  const master = (inLatest.length ? inLatest : snaps).filter(x => x.origin === "master");
+  const src = master.length ? master : (inLatest.length ? inLatest : snaps);
+  const latest = {};
+  src.forEach(x => { const k = personKey(x); if (!latest[k] || latest[k].date <= x.date) latest[k] = x; });
+  // 최근 접촉방법 (누계 상태 대신)
+  const lastM = {};
+  site.contacts.forEach(c => { if (!c.name || !c.method) return; const k = personKey(c); if (!lastM[k] || lastM[k].d < c.date) lastM[k] = { d: c.date, m: c.method }; });
+  const state = contactStateFor(site.id);
+  return Object.entries(latest).map(([k, x]) => {
+    const role = leaseRoleOf(x.role) ? x.role : "";
+    return { key: k, chajang: x.chajang || "(담당 미지정)", type: role ? "임대의원" : "조합원", role, cum: lastM[k] ? lastM[k].m : "미접촉", week: "" };
+  }).filter(p => ignoreFilter || ((!state.selectedChajang.size || state.selectedChajang.has(p.chajang)) &&
+    (!state.targetType || (state.targetType === "임대의원" ? p.type === "임대의원" : p.type !== "임대의원"))));
 }
 
 function renderStaleWarn(site) {
@@ -2959,7 +2983,7 @@ function importMasterRegistryExcel(site, binary) {
   // ② 같은 사람·같은 날짜 중복 기록 제거
   // ③ 명부(조합원 B열=1)에 없는 사람의 기록은 확인 후 삭제
   const regByKey = {}, regByName = {};
-  personRows.forEach(p => { regByKey[personKey(p)] = p; (regByName[p.name] = regByName[p.name] || []).push(p); });
+  personRows.forEach(p => { const k = personKey(p); if (!(regByKey[k] && regByKey[k].role && !p.role)) regByKey[k] = p; (regByName[p.name] = regByName[p.name] || []).push(p); });
   let mergedLegacy = 0, removedDup = 0, removedOrphan = 0;
   site.contacts.forEach(c => {
     if (!c.name) return;
@@ -2997,6 +3021,12 @@ function importMasterRegistryExcel(site, binary) {
   // 이전 스냅샷(이전 명부 업로드)과 비교
   site.registryStats = site.registryStats || {};
   site.registryStats[asOf] = regRows;
+  // 같은 사람(이름+생년월일)이 여러 행이면 하나로 — 직책 있는 행 우선
+  {
+    const m = new Map();
+    personRows.forEach(p => { const k = personKey(p); const e = m.get(k); if (!e || (!e.role && p.role)) m.set(k, p); });
+    personRows.length = 0; m.forEach(v => personRows.push(v));
+  }
   const snapByKey = {};
   site.stanceSnapshots.forEach(x => (snapByKey[personKey(x)] = snapByKey[personKey(x)] || []).push(x));
   personRows.forEach(p => {
